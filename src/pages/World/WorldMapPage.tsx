@@ -6,8 +6,8 @@ import {
   saveWorldMap,
   type MapCity,
   type MapState,
-  type MapRoad
 } from "../../api/worldMap";
+import { CityMapEditor } from "../../components/CityMapEditor";
 
 const MAP_WIDTH = 96;
 const MAP_HEIGHT = 96;
@@ -316,7 +316,10 @@ function addCityToMap(map: MapState, name: string, xRatio: number, yRatio: numbe
     population: Math.floor(500 + Math.random() * 4500),
   };
 
-  const roads: MapRoad[] = [...map.roads];
+  const roads = map.roads.map((road) => ({
+    ...road,
+    points: road.points.map((point) => ({ ...point })),
+  }));
   if (map.cities.length > 0) {
     const nearest = findNearestCity(map.cities, city);
     if (nearest) {
@@ -351,6 +354,7 @@ export function WorldMapPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [pendingCityName, setPendingCityName] = useState("New City");
   const [selectedCity, setSelectedCity] = useState<MapCity | null>(null);
+  const [cityEditorCity, setCityEditorCity] = useState<MapCity | null>(null);
   const [saving, setSaving] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -618,9 +622,7 @@ export function WorldMapPage() {
         <section className="border border-slate-800 rounded-lg p-4 bg-slate-950/50 space-y-3">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-sm font-semibold text-slate-100">
-                {selectedCity.name}
-              </h3>
+              <h3 className="text-sm font-semibold text-slate-100">{selectedCity.name}</h3>
               <p className="text-xs text-slate-500">
                 Elevation: {(selectedCity.elevation * 1000).toFixed(0)} m · Population{" "}
                 {selectedCity.population.toLocaleString()}
@@ -633,11 +635,31 @@ export function WorldMapPage() {
               Close
             </button>
           </div>
-          <div className="bg-slate-900 rounded p-3 text-xs text-slate-400 min-h-[120px]">
-            City map editor coming soon. For now, this panel serves as the entry point for
-            district notes, encounters, and trade routes.
+          <div className="bg-slate-900 rounded p-3 text-xs text-slate-400 space-y-3">
+            <p>
+              Use the city mapper to sketch districts, plazas, and alleyways. Private estates
+              spawn winding minor roads while civic buildings anchor main routes.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setCityEditorCity(selectedCity)}
+                className="px-3 py-2 rounded bg-sky-600 text-white text-xs"
+              >
+                Open city mapper
+              </button>
+              <button
+                onClick={() => setStatusMessage(`Focused view on ${selectedCity.name}.`)}
+                className="px-3 py-2 rounded border border-slate-700 text-xs"
+              >
+                Set focus
+              </button>
+            </div>
           </div>
         </section>
+      )}
+
+      {cityEditorCity && (
+        <CityMapEditor city={cityEditorCity} onClose={() => setCityEditorCity(null)} />
       )}
     </div>
   );

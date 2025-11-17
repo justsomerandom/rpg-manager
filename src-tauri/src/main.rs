@@ -53,7 +53,9 @@ fn main() {
             list_lore_entries,
             create_lore_entry,
             get_world_map,
-            save_world_map
+            save_world_map,
+            get_city_map,
+            save_city_map
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");

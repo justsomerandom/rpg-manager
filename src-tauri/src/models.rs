@@ -85,6 +85,42 @@ pub struct MapState {
     pub roads: Vec<MapRoad>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CityRoadPoint {
+    pub id: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CityRoad {
+    pub id: String,
+    pub name: String,
+    pub importance: String,
+    pub points: Vec<CityRoadPoint>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CityBuilding {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub x: f64,
+    pub y: f64,
+    pub footprint: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CityMap {
+    pub city_id: String,
+    pub size_label: String,
+    pub width: u32,
+    pub height: u32,
+    pub seed: u64,
+    pub roads: Vec<CityRoad>,
+    pub buildings: Vec<CityBuilding>,
+}
+
 #[derive(Serialize)]
 pub struct LoreBook {
     pub id: String,
