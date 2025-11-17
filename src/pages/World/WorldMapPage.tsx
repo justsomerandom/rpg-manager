@@ -29,17 +29,23 @@ type Biome =
   | "mountain"
   | "snow";
 
-type EditorMode =
-  | "view"
-  | "place-city"
-  | "raise"
-  | "lower"
-  | "paint-biome"
-  | "add-road";
-
 type PixelPoint = { x: number; y: number };
 
 type PanVector = { x: number; y: number };
+
+type ToolGroup = "general" | "biome" | "relief" | "locations";
+
+type PrimaryAction =
+  | "navigate"
+  | "paint-biome"
+  | "raise"
+  | "lower"
+  | "place-city"
+  | "add-road";
+
+type BrushAction = "paint-biome" | "raise" | "lower";
+
+type ViewMode = "iso" | "grid";
 
 const BIOME_COLORS: Record<Biome, [number, number, number]> = {
   ocean: [8, 29, 48],
@@ -71,6 +77,22 @@ const BIOME_TARGETS: Record<
   tundra: { relief: 0.65, moisture: 0.2 },
   mountain: { relief: 0.85, moisture: 0.3 },
   snow: { relief: 0.92, moisture: 0.4 },
+};
+
+const TOOL_GROUP_LABELS: Record<ToolGroup, string> = {
+  general: "General",
+  biome: "Biome",
+  relief: "Relief",
+  locations: "Locations",
+};
+
+const PRIMARY_ACTION_LABEL: Record<PrimaryAction, string> = {
+  navigate: "Navigate / select",
+  "paint-biome": "Paint biome",
+  raise: "Raise relief",
+  lower: "Lower relief",
+  "place-city": "Add city",
+  "add-road": "Add road",
 };
 
 function clamp(value: number, min = 0, max = 1) {
@@ -212,6 +234,7 @@ function isoToGrid(
   const gridY = (dy - dx) / 2;
   return { gridX, gridY };
 }
+
 function drawIsometricMap(
   canvas: HTMLCanvasElement | null,
   map: MapState,
@@ -335,9 +358,90 @@ function drawIsometricMap(
     ctx.fillText(city.name, x, y - 12);
   });
 }
+
+function drawGridMap(
+  canvas: HTMLCanvasElement | null,
+  map: MapState,
+  zoom: number,
+  pan: PanVector,
+  viewport: { width: number; height: number },
+  highlightCityId?: string | null,
+  roadDraftStart?: PixelPoint | null
+) {
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const pixelRatio = window.devicePixelRatio ?? 1;
+  canvas.width = viewport.width * pixelRatio;
+  canvas.height = viewport.height * pixelRatio;
+  canvas.style.width = `${viewport.width}px`;
+  canvas.style.height = `${viewport.height}px`;
+  ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  ctx.clearRect(0, 0, viewport.width, viewport.height);
+
+  const cellSize = TILE_BASE * zoom;
+  ctx.fillStyle = "#04120b";
+  ctx.fillRect(0, 0, viewport.width, viewport.height);
+
+  for (let y = 0; y < map.height; y += 1) {
+    for (let x = 0; x < map.width; x += 1) {
+      const idx = y * map.width + x;
+      const relief = map.relief[idx];
+      const moisture = map.moisture[idx];
+      const biome = computeBiome(relief, moisture, map.water_level);
+      const color = BIOME_COLORS[biome];
+      const screenX = x * cellSize + pan.x;
+      const screenY = y * cellSize + pan.y;
+      ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+      ctx.fillRect(screenX, screenY, cellSize + 1, cellSize + 1);
+    }
+  }
+
+  ctx.strokeStyle = "rgba(224, 196, 128, 0.8)";
+  ctx.lineWidth = 2;
+  map.roads.forEach((road) => {
+    if (road.points.length === 0) return;
+    ctx.beginPath();
+    const first = road.points[0];
+    ctx.moveTo(first.x * map.width * cellSize + pan.x, first.y * map.height * cellSize + pan.y);
+    for (let i = 1; i < road.points.length; i += 1) {
+      const point = road.points[i];
+      ctx.lineTo(point.x * map.width * cellSize + pan.x, point.y * map.height * cellSize + pan.y);
+    }
+    ctx.stroke();
+  });
+
+  if (roadDraftStart) {
+    ctx.fillStyle = "rgba(255, 198, 109, 0.8)";
+    ctx.beginPath();
+    ctx.arc(
+      roadDraftStart.x * map.width * cellSize + pan.x,
+      roadDraftStart.y * map.height * cellSize + pan.y,
+      6,
+      0,
+      Math.PI * 2
+    );
+    ctx.fill();
+  }
+
+  map.cities.forEach((city) => {
+    const screenX = city.x * map.width * cellSize + pan.x;
+    const screenY = city.y * map.height * cellSize + pan.y;
+    ctx.fillStyle = city.id === highlightCityId ? "#ffe066" : "#e3f2db";
+    ctx.beginPath();
+    ctx.arc(screenX, screenY, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.font = "12px 'Space Grotesk', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(city.name, screenX, screenY - 12);
+  });
+}
+
 function applyBrushToMap(
   map: MapState,
-  mode: EditorMode,
+  action: BrushAction,
   biome: Biome,
   coords: PixelPoint,
   radius: number
@@ -358,11 +462,11 @@ function applyBrushToMap(
       if (distance > brushRadius) continue;
       const idx = y * width + x;
       const falloff = 1 - distance / brushRadius;
-      if (mode === "raise") {
+      if (action === "raise") {
         copy.relief[idx] = clamp(copy.relief[idx] + falloff * 0.02);
-      } else if (mode === "lower") {
+      } else if (action === "lower") {
         copy.relief[idx] = clamp(copy.relief[idx] - falloff * 0.02);
-      } else if (mode === "paint-biome") {
+      } else {
         copy.relief[idx] = clamp(copy.relief[idx] + (BIOME_TARGETS[biome].relief - copy.relief[idx]) * falloff);
         copy.moisture[idx] = clamp(
           copy.moisture[idx] + (BIOME_TARGETS[biome].moisture - copy.moisture[idx]) * falloff
@@ -495,13 +599,13 @@ function snapToNetwork(map: MapState, point: PixelPoint) {
   });
   return snapped;
 }
+
 export function WorldMapPage() {
   const { worldId } = useParams();
   const [mapState, setMapState] = useState<MapState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [editorMode, setEditorMode] = useState<EditorMode>("view");
   const [selectedBiome, setSelectedBiome] = useState<Biome>("plains");
   const [brushSize, setBrushSize] = useState(0.05);
   const [selectedCity, setSelectedCity] = useState<MapCity | null>(null);
@@ -516,11 +620,49 @@ export function WorldMapPage() {
   const [desiredSize, setDesiredSize] = useState(MAP_DEFAULT_SIZE);
   const [saving, setSaving] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [toolGroup, setToolGroup] = useState<ToolGroup>("general");
+  const [reliefAction, setReliefAction] = useState<BrushAction>("raise");
+  const [locationAction, setLocationAction] = useState<PrimaryAction>("navigate");
+  const [viewMode, setViewMode] = useState<ViewMode>("iso");
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const lastPanRef = useRef<{ x: number; y: number } | null>(null);
   const [viewportSize, setViewportSize] = useState({ width: 1200, height: 800 });
+
+  const primaryAction = useMemo<PrimaryAction>(() => {
+    switch (toolGroup) {
+      case "biome":
+        return "paint-biome";
+      case "relief":
+        return reliefAction;
+      case "locations":
+        return locationAction;
+      default:
+        return "navigate";
+    }
+  }, [toolGroup, reliefAction, locationAction]);
+
+  const isBrushAction =
+    primaryAction === "paint-biome" ||
+    primaryAction === "raise" ||
+    primaryAction === "lower";
+
+  useEffect(() => {
+    if (toolGroup !== "locations") {
+      setRoadDraftStart(null);
+      setLocationAction("navigate");
+    }
+    if (toolGroup !== "relief") {
+      setReliefAction("raise");
+    }
+  }, [toolGroup]);
+
+  useEffect(() => {
+    if (locationAction !== "add-road") {
+      setRoadDraftStart(null);
+    }
+  }, [locationAction]);
 
   useEffect(() => {
     const node = viewportRef.current;
@@ -554,21 +696,30 @@ export function WorldMapPage() {
 
   useEffect(() => {
     if (!mapState) return;
-    drawIsometricMap(
-      canvasRef.current,
-      mapState,
-      zoom,
-      panOffset,
-      viewportSize,
-      selectedCity?.id,
-      roadDraftStart
-        ? {
-            x: roadDraftStart.x,
-            y: roadDraftStart.y,
-          }
-        : null
-    );
-  }, [mapState, zoom, panOffset, viewportSize, selectedCity, roadDraftStart]);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (viewMode === "iso") {
+      drawIsometricMap(
+        canvas,
+        mapState,
+        zoom,
+        panOffset,
+        viewportSize,
+        selectedCity?.id,
+        roadDraftStart
+      );
+    } else {
+      drawGridMap(
+        canvas,
+        mapState,
+        zoom,
+        panOffset,
+        viewportSize,
+        selectedCity?.id,
+        roadDraftStart
+      );
+    }
+  }, [mapState, zoom, panOffset, viewportSize, selectedCity, roadDraftStart, viewMode]);
 
   const mapInfo = useMemo(() => {
     if (!mapState) return null;
@@ -632,6 +783,14 @@ export function WorldMapPage() {
       const rect = canvasRef.current.getBoundingClientRect();
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
+      if (viewMode === "grid") {
+        const cellSize = TILE_BASE * zoom;
+        const gridX = (localX - panOffset.x) / cellSize;
+        const gridY = (localY - panOffset.y) / cellSize;
+        const normX = clamp(gridX / mapState.width, 0, 0.9999);
+        const normY = clamp(gridY / mapState.height, 0, 0.9999);
+        return { x: normX, y: normY };
+      }
       const tileWidth = TILE_BASE * zoom;
       const tileHeight = tileWidth / 2;
       const originX = viewportSize.width / 2 + panOffset.x;
@@ -641,14 +800,15 @@ export function WorldMapPage() {
       const normY = clamp(gridY / mapState.height, 0, 0.9999);
       return { x: normX, y: normY };
     },
-    [mapState, panOffset, viewportSize, zoom]
+    [mapState, panOffset, viewportSize, zoom, viewMode]
   );
 
   const applyBrushAt = (event: MouseEvent<HTMLDivElement>) => {
+    if (!isBrushAction) return;
     const coords = screenToMapPoint(event);
     if (!coords || !mapState) return;
     setMapState((prev) =>
-      prev ? applyBrushToMap(prev, editorMode, selectedBiome, coords, brushSize) : prev
+      prev ? applyBrushToMap(prev, primaryAction as BrushAction, selectedBiome, coords, brushSize) : prev
     );
   };
 
@@ -658,13 +818,25 @@ export function WorldMapPage() {
     setZoom((prev) => clamp(prev + delta, MIN_ZOOM, MAX_ZOOM));
   };
 
+  const beginPan = (clientX: number, clientY: number) => {
+    setIsPanning(true);
+    lastPanRef.current = { x: clientX, y: clientY };
+  };
+
+  const endGestures = () => {
+    setIsPanning(false);
+    setIsBrushing(false);
+    lastPanRef.current = null;
+  };
+
   const handleCanvasMouseDown = (event: MouseEvent<HTMLDivElement>) => {
-    if (editorMode === "view") {
-      setIsPanning(true);
-      lastPanRef.current = { x: event.clientX, y: event.clientY };
+    if (event.button === 2) {
+      event.preventDefault();
+      beginPan(event.clientX, event.clientY);
       return;
     }
-    if (editorMode === "raise" || editorMode === "lower" || editorMode === "paint-biome") {
+    if (event.button !== 0) return;
+    if (isBrushAction) {
       setIsBrushing(true);
       applyBrushAt(event);
     }
@@ -676,95 +848,352 @@ export function WorldMapPage() {
       const dy = event.clientY - lastPanRef.current.y;
       setPanOffset((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
       lastPanRef.current = { x: event.clientX, y: event.clientY };
-    } else if (isBrushing) {
+      return;
+    }
+    if (isBrushing) {
       applyBrushAt(event);
     }
   };
 
-  const stopGestures = () => {
-    setIsPanning(false);
-    setIsBrushing(false);
-    lastPanRef.current = null;
-  };
-
   const handleCanvasClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || isBrushAction) return;
     const coords = screenToMapPoint(event);
     if (!coords || !mapState) return;
-
-    if (editorMode === "place-city") {
+    if (primaryAction === "navigate") {
+      const clickedCity = mapState.cities.find((city) => distance(city, coords) < 0.02);
+      setSelectedCity(clickedCity ?? null);
+      return;
+    }
+    if (primaryAction === "place-city") {
       const name = `City ${mapState.cities.length + 1}`;
       setMapState((prev) => (prev ? addCityToMap(prev, name, coords.x, coords.y) : prev));
       setStatusMessage(`Placed ${name} and connected it to the road network.`);
       setSelectedCity(null);
-    } else if (editorMode === "add-road") {
+      return;
+    }
+    if (primaryAction === "add-road") {
       const snapped = snapToNetwork(mapState, coords);
       if (!roadDraftStart) {
         setRoadDraftStart(snapped);
         setStatusMessage(`Road start set near ${snapped.label}. Select an end point.`);
-      } else {
-        const path = buildRoadPath(
-          mapState,
-          {
-            id: "",
-            name: "Start",
-            x: roadDraftStart.x,
-            y: roadDraftStart.y,
-            elevation: 0,
-            population: 0,
-          },
-          {
-            id: "",
-            name: "End",
-            x: snapped.x,
-            y: snapped.y,
-            elevation: 0,
-            population: 0,
-          }
-        );
-        if (path && path.length > 1) {
-          setMapState((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  roads: [
-                    ...prev.roads,
-                    {
-                      id: randomId(),
-                      from_city_id: roadDraftStart.targetId,
-                      to_city_id: snapped.targetId,
-                      points: path,
-                    },
-                  ],
-                }
-              : prev
-          );
-          setStatusMessage("Road added between points.");
-        } else {
-          setStatusMessage("Unable to route road between those points.");
-        }
-        setRoadDraftStart(null);
+        return;
       }
-    } else if (editorMode === "view") {
-      const clickedCity = mapState.cities.find(
-        (city) => distance(city, coords) < 0.02
+      const path = buildRoadPath(
+        mapState,
+        {
+          id: "start",
+          name: "Start",
+          x: roadDraftStart.x,
+          y: roadDraftStart.y,
+          elevation: 0,
+          population: 0,
+        },
+        {
+          id: "end",
+          name: "End",
+          x: snapped.x,
+          y: snapped.y,
+          elevation: 0,
+          population: 0,
+        }
       );
-      setSelectedCity(clickedCity ?? null);
+      if (path && path.length > 1) {
+        setMapState((prev) =>
+          prev
+            ? {
+                ...prev,
+                roads: [
+                  ...prev.roads,
+                  {
+                    id: randomId(),
+                    from_city_id: roadDraftStart.targetId,
+                    to_city_id: snapped.targetId,
+                    points: path,
+                  },
+                ],
+              }
+            : prev
+        );
+        setStatusMessage("Road added between points.");
+      } else {
+        setStatusMessage("Unable to route road between those points.");
+      }
+      setRoadDraftStart(null);
     }
   };
 
-  const toolbarModes: { mode: EditorMode; label: string }[] = [
-    { mode: "view", label: "Navigate" },
-    { mode: "place-city", label: "Cities" },
-    { mode: "raise", label: "Raise" },
-    { mode: "lower", label: "Lower" },
-    { mode: "paint-biome", label: "Biomes" },
-    { mode: "add-road", label: "Roads" },
-  ];
+  const cursorStyle = useMemo(() => {
+    if (isPanning) return "grabbing";
+    if (primaryAction === "add-road" || primaryAction === "place-city") return "pointer";
+    if (isBrushAction) return "crosshair";
+    return "grab";
+  }, [isPanning, primaryAction, isBrushAction]);
 
-  const isBrushMode =
-    editorMode === "raise" ||
-    editorMode === "lower" ||
-    editorMode === "paint-biome";
+  const renderGeneralPanel = () => (
+    <>
+      <section className="space-y-2 mt-2">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-brand-glow">View</h3>
+            <p className="text-xs text-earth-sand/70">Zoom {zoom.toFixed(2)} • Pan to explore</p>
+          </div>
+          <button
+            className="text-[11px] text-earth-sand/70 hover:text-white"
+            onClick={() => {
+              setPanOffset({ x: 0, y: 0 });
+              setZoom(1);
+            }}
+          >
+            Reset
+          </button>
+        </div>
+        <input
+          type="range"
+          min={MIN_ZOOM}
+          max={MAX_ZOOM}
+          step={0.05}
+          value={zoom}
+          onChange={(e) => setZoom(Number(e.target.value))}
+          className="w-full"
+        />
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold text-brand-glow">Terrain synthesis</h3>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={handleGenerateMap} className="primary-button text-xs">
+            Auto-generate
+          </button>
+          <button onClick={handleNaturalize} className="secondary-button text-xs">
+            Naturalize relief
+          </button>
+        </div>
+        <label className="block text-xs text-earth-sand/70">
+          Water level ({mapState?.water_level.toFixed(2)})
+        </label>
+        <input
+          type="range"
+          min={0.2}
+          max={0.7}
+          step={0.01}
+          value={mapState?.water_level ?? DEFAULT_WATER_LEVEL}
+          onChange={(e) => handleWaterChange(Number(e.target.value))}
+          className="w-full"
+        />
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold text-brand-glow">Grid & metrics</h3>
+        <label className="text-xs text-earth-sand/70">Map resolution</label>
+        <div className="flex gap-2">
+          <select
+            className="flex-1 rounded border border-grove-700 bg-grove-800 px-3 py-2 text-sm"
+            value={desiredSize}
+            onChange={(e) => setDesiredSize(Number(e.target.value))}
+          >
+            {MAP_SIZE_CHOICES.map((size) => (
+              <option key={size} value={size}>
+                {size} × {size}
+              </option>
+            ))}
+          </select>
+          <button onClick={handleResizeMap} className="secondary-button text-xs">
+            Apply
+          </button>
+        </div>
+        <div className="space-y-1 text-xs text-earth-sand/70">
+          <p>Seed: {mapState?.seed}</p>
+          <p>
+            Cells: {mapState?.width} × {mapState?.height}
+          </p>
+          <p>Cities: {mapInfo?.cityCount ?? 0}</p>
+          <p>Roads: {mapInfo?.roadCount ?? 0}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={handleSaveMap}
+            disabled={saving}
+            className="primary-button text-xs disabled:opacity-50"
+          >
+            {saving ? "Saving..." : "Save map"}
+          </button>
+          <button
+            onClick={() => {
+              setMapState((prev) => (prev ? { ...prev, cities: [], roads: [] } : prev));
+              setStatusMessage("Cleared cities and roads.");
+            }}
+            className="secondary-button text-xs"
+          >
+            Clear settlements
+          </button>
+        </div>
+      </section>
+    </>
+  );
+
+  const renderBiomePanel = () => (
+    <section className="space-y-3 mt-2">
+      <div>
+        <h3 className="text-sm font-semibold text-brand-glow">Biome brush</h3>
+        <p className="text-xs text-earth-sand/70">
+          Paint regional colors and moisture bands. Brush is the active primary action.
+        </p>
+      </div>
+      <div className="flex gap-2 text-xs items-center">
+        <label className="text-earth-sand/80 uppercase tracking-wide">Biome</label>
+        <select
+          className="flex-1 rounded border border-grove-700 bg-grove-800 px-2 py-1"
+          value={selectedBiome}
+          onChange={(e) => setSelectedBiome(e.target.value as Biome)}
+        >
+          {(
+            [
+              "ocean",
+              "shallow",
+              "beach",
+              "plains",
+              "forest",
+              "jungle",
+              "desert",
+              "tundra",
+              "mountain",
+              "snow",
+            ] as Biome[]
+          ).map((b) => (
+            <option key={b} value={b}>
+              {b}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs text-earth-sand/70">Brush size</label>
+        <input
+          type="range"
+          min={0.01}
+          max={0.15}
+          step={0.01}
+          value={brushSize}
+          onChange={(e) => setBrushSize(Number(e.target.value))}
+          className="w-full"
+        />
+      </div>
+    </section>
+  );
+
+  const renderReliefPanel = () => (
+    <section className="space-y-3 mt-2">
+      <div>
+        <h3 className="text-sm font-semibold text-brand-glow">Relief sculpting</h3>
+        <p className="text-xs text-earth-sand/70">Raise or lower elevation with soft brushes.</p>
+      </div>
+      <div className="flex gap-2">
+        {(["raise", "lower"] as BrushAction[]).map((action) => (
+          <button
+            key={action}
+            onClick={() => setReliefAction(action)}
+            className={`text-xs px-3 py-1.5 rounded-full border transition ${
+              reliefAction === action
+                ? "border-brand bg-brand/20 text-brand-glow"
+                : "border-grove-700 text-earth-sand/70 hover:text-white"
+            }`}
+          >
+            {action === "raise" ? "Raise" : "Lower"}
+          </button>
+        ))}
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs text-earth-sand/70">Brush size</label>
+        <input
+          type="range"
+          min={0.01}
+          max={0.15}
+          step={0.01}
+          value={brushSize}
+          onChange={(e) => setBrushSize(Number(e.target.value))}
+          className="w-full"
+        />
+      </div>
+    </section>
+  );
+
+  const renderLocationsPanel = () => (
+    <section className="space-y-3 mt-2">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-brand-glow">Locations</h3>
+          <p className="text-xs text-earth-sand/70">
+            Place settlements or lay roads. Primary action defaults to navigation.
+          </p>
+        </div>
+        <div className="flex gap-1">
+          {([
+            "navigate",
+            "place-city",
+            "add-road",
+          ] as PrimaryAction[]).map((action) => (
+            <button
+              key={action}
+              onClick={() => setLocationAction(action)}
+              className={`text-[11px] px-3 py-1 rounded-full border transition ${
+                locationAction === action
+                  ? "border-brand bg-brand/20 text-brand-glow"
+                  : "border-grove-700 text-earth-sand/70 hover:text-white"
+              }`}
+            >
+              {PRIMARY_ACTION_LABEL[action]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+        {mapState?.cities.length === 0 ? (
+          <p className="text-xs text-earth-sand/60">
+            No settlements yet. Switch to “Add city” and click the map to create one.
+          </p>
+        ) : (
+          mapState?.cities.map((city) => (
+            <div
+              key={city.id}
+              className="rounded border border-grove-700/70 px-3 py-2 text-xs text-earth-sand/80 flex items-center justify-between gap-2"
+            >
+              <div>
+                <p className="text-sm text-brand-glow">{city.name}</p>
+                <p>Pop. {city.population.toLocaleString()}</p>
+              </div>
+              <div className="flex flex-col gap-1">
+                <button
+                  className="text-[11px] text-earth-sand/70 hover:text-white"
+                  onClick={() => setSelectedCity(city)}
+                >
+                  Inspect
+                </button>
+                <button
+                  className="text-[11px] text-earth-sand/70 hover:text-white"
+                  onClick={() => setCityEditorCity(city)}
+                >
+                  City map
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+
+  const renderSidebarContent = () => {
+    switch (toolGroup) {
+      case "biome":
+        return renderBiomePanel();
+      case "relief":
+        return renderReliefPanel();
+      case "locations":
+        return renderLocationsPanel();
+      default:
+        return renderGeneralPanel();
+    }
+  };
 
   if (!worldId) {
     return <p className="text-sm text-red-400 p-6">World not found.</p>;
@@ -778,36 +1207,42 @@ export function WorldMapPage() {
     <div className="relative w-full h-full bg-brand-deep text-brand-glow overflow-hidden">
       <div
         ref={viewportRef}
-        className="absolute inset-0 cursor-crosshair"
+        className="absolute inset-0"
+        style={{ cursor: cursorStyle }}
+        onContextMenu={(e) => e.preventDefault()}
         onWheel={handleWheel}
         onMouseDown={handleCanvasMouseDown}
         onMouseMove={handleCanvasMouseMove}
-        onMouseUp={stopGestures}
-        onMouseLeave={stopGestures}
+        onMouseUp={endGestures}
+        onMouseLeave={endGestures}
         onClick={handleCanvasClick}
       >
         <canvas ref={canvasRef} className="block select-none" />
       </div>
 
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30">
-        <div className="flex gap-2 rounded-full bg-grove-900/90 px-5 py-3 shadow-panel backdrop-blur">
-          {toolbarModes.map(({ mode, label }) => (
-            <button
-              key={mode}
-              onClick={() => {
-                setEditorMode(mode);
-                setRoadDraftStart(null);
-              }}
-              className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${
-                editorMode === mode
-                  ? "bg-brand text-black shadow-lg"
-                  : "text-brand-glow/70 hover:text-brand-glow hover:bg-brand/10"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex gap-2 rounded-full bg-grove-900/90 px-5 py-3 shadow-panel backdrop-blur">
+        {(Object.keys(TOOL_GROUP_LABELS) as ToolGroup[]).map((group) => (
+          <button
+            key={group}
+            onClick={() => setToolGroup(group)}
+            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${
+              toolGroup === group
+                ? "bg-brand text-black shadow-lg"
+                : "text-brand-glow/70 hover:text-brand-glow hover:bg-brand/10"
+            }`}
+          >
+            {TOOL_GROUP_LABELS[group]}
+          </button>
+        ))}
+      </div>
+
+      <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
+        <button
+          className="text-xs px-3 py-1.5 rounded-full border border-grove-700 bg-grove-900/80 hover:text-white"
+          onClick={() => setViewMode((prev) => (prev === "iso" ? "grid" : "iso"))}
+        >
+          {viewMode === "iso" ? "Iso view" : "Grid view"}
+        </button>
       </div>
 
       {statusMessage && (
@@ -823,7 +1258,7 @@ export function WorldMapPage() {
       )}
 
       {error && (
-        <div className="absolute top-4 right-4 z-30 bg-red-900/70 border border-red-500 text-xs px-4 py-2 rounded shadow-lg">
+        <div className="absolute top-4 right-32 z-30 bg-red-900/70 border border-red-500 text-xs px-4 py-2 rounded shadow-lg">
           Error: {error}
         </div>
       )}
@@ -838,212 +1273,27 @@ export function WorldMapPage() {
             className="text-[11px] text-earth-sand/70 hover:text-white self-end px-4 py-2"
             onClick={() => setSidebarOpen((prev) => !prev)}
           >
-            {sidebarOpen ? "Collapse" : "Expand"}
+            {sidebarOpen ? "<" : ">"}
           </button>
           <div
             className={`flex-1 overflow-y-auto space-y-6 px-6 pb-6 transition-opacity ${
               sidebarOpen ? "opacity-100" : "opacity-0 pointer-events-none"
             }`}
           >
-            <section className="space-y-2 mt-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold text-brand-glow">View</h3>
-                  <p className="text-xs text-earth-sand/70">
-                    Zoom {zoom.toFixed(2)} · Pan to explore the atlas.
-                  </p>
-                </div>
-                <button
-                  className="text-[11px] text-earth-sand/70 hover:text-white"
-                  onClick={() => {
-                    setPanOffset({ x: 0, y: 0 });
-                    setZoom(1);
-                  }}
-                >
-                  Reset
-                </button>
-              </div>
-              <input
-                type="range"
-                min={MIN_ZOOM}
-                max={MAX_ZOOM}
-                step={0.05}
-                value={zoom}
-                onChange={(e) => setZoom(Number(e.target.value))}
-                className="w-full"
-              />
-            </section>
-
-            <section className="space-y-3">
-              <h3 className="text-sm font-semibold text-brand-glow">Terrain tools</h3>
-              {editorMode === "paint-biome" && (
-                <div className="flex gap-2 text-xs items-center">
-                  <label className="text-earth-sand/80 uppercase tracking-wide">
-                    Biome
-                  </label>
-                  <select
-                    className="flex-1 rounded border border-grove-700 bg-grove-800 px-2 py-1"
-                    value={selectedBiome}
-                    onChange={(e) => setSelectedBiome(e.target.value as Biome)}
-                  >
-                    {(
-                      [
-                        "ocean",
-                        "shallow",
-                        "beach",
-                        "plains",
-                        "forest",
-                        "jungle",
-                        "desert",
-                        "tundra",
-                        "mountain",
-                        "snow",
-                      ] as Biome[]
-                    ).map((b) => (
-                      <option key={b} value={b}>
-                        {b}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {isBrushMode && (
-                <div className="space-y-1">
-                  <label className="text-xs text-earth-sand/70">Brush size</label>
-                  <input
-                    type="range"
-                    min={0.01}
-                    max={0.15}
-                    step={0.01}
-                    value={brushSize}
-                    onChange={(e) => setBrushSize(Number(e.target.value))}
-                    className="w-full"
-                  />
-                </div>
-              )}
-
-              <div className="flex flex-wrap gap-2">
-                <button onClick={handleGenerateMap} className="primary-button text-xs">
-                  Auto-generate
-                </button>
-                <button onClick={handleNaturalize} className="secondary-button text-xs">
-                  Naturalize relief
-                </button>
-              </div>
-              <label className="block text-xs text-earth-sand/70">
-                Water level ({mapState.water_level.toFixed(2)})
-              </label>
-              <input
-                type="range"
-                min={0.2}
-                max={0.7}
-                step={0.01}
-                value={mapState.water_level}
-                onChange={(e) => handleWaterChange(Number(e.target.value))}
-                className="w-full"
-              />
-            </section>
-
-            <section className="space-y-2">
-              <h3 className="text-sm font-semibold text-brand-glow">Grid & view</h3>
-              <label className="text-xs text-earth-sand/70">Map resolution</label>
-              <div className="flex gap-2">
-                <select
-                  className="flex-1 rounded border border-grove-700 bg-grove-800 px-3 py-2 text-sm"
-                  value={desiredSize}
-                  onChange={(e) => setDesiredSize(Number(e.target.value))}
-                >
-                  {MAP_SIZE_CHOICES.map((size) => (
-                    <option key={size} value={size}>
-                      {size} × {size}
-                    </option>
-                  ))}
-                </select>
-                <button onClick={handleResizeMap} className="secondary-button text-xs">
-                  Apply
-                </button>
-              </div>
-              <div className="space-y-1 text-xs text-earth-sand/70">
-                <p>Seed: {mapState.seed}</p>
-                <p>
-                  Cells: {mapState.width} × {mapState.height}
-                </p>
-                <p>Cities: {mapInfo?.cityCount ?? 0}</p>
-                <p>Roads: {mapInfo?.roadCount ?? 0}</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={handleSaveMap}
-                  disabled={saving}
-                  className="primary-button text-xs disabled:opacity-50"
-                >
-                  {saving ? "Saving..." : "Save map"}
-                </button>
-                <button
-                  onClick={() => {
-                    setMapState((prev) =>
-                      prev ? { ...prev, cities: [], roads: [] } : prev
-                    );
-                    setStatusMessage("Cleared cities and roads.");
-                  }}
-                  className="secondary-button text-xs"
-                >
-                  Clear settlements
-                </button>
-              </div>
-            </section>
-
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold text-brand-glow">Atlas ledger</h3>
-                  <p className="text-xs text-earth-sand/70">Cities anchor the road network.</p>
-                </div>
-                <button
-                  className="text-[11px] text-earth-sand/70 hover:text-white"
-                  onClick={() => setEditorMode("place-city")}
-                >
-                  Place city
-                </button>
-              </div>
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                {mapState.cities.length === 0 ? (
-                  <p className="text-xs text-earth-sand/60">
-                    No settlements yet. Use the city tool to drop one.
-                  </p>
-                ) : (
-                  mapState.cities.map((city) => (
-                    <div
-                      key={city.id}
-                      className="rounded border border-grove-700/70 px-3 py-2 text-xs text-earth-sand/80 flex items-center justify-between gap-2"
-                    >
-                      <div>
-                        <p className="text-sm text-brand-glow">{city.name}</p>
-                        <p>Pop. {city.population.toLocaleString()}</p>
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <button
-                          className="text-[11px] text-earth-sand/70 hover:text-white"
-                          onClick={() => setSelectedCity(city)}
-                        >
-                          Inspect
-                        </button>
-                        <button
-                          className="text-[11px] text-earth-sand/70 hover:text-white"
-                          onClick={() => setCityEditorCity(city)}
-                        >
-                          City map
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </section>
+            {renderSidebarContent()}
           </div>
         </div>
       </aside>
+
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-full bg-grove-900/80 border border-grove-700 text-xs text-earth-sand/80 shadow-panel">
+        Primary: {PRIMARY_ACTION_LABEL[primaryAction]} • Secondary: Navigate / pan
+      </div>
+
+      {roadDraftStart && primaryAction === "add-road" && (
+        <p className="absolute bottom-4 left-4 text-[11px] text-earth-sand/80 z-30">
+          Road start near {roadDraftStart.label}. Click another node to complete.
+        </p>
+      )}
 
       {selectedCity && (
         <div className="absolute bottom-6 right-6 z-30 w-80 rounded-2xl border border-grove-700 bg-grove-900/90 p-4 shadow-panel space-y-3">
