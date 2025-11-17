@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type TemplateType = "character" | "item" | "ability" | "custom_entity";
+export type TemplateType =
+  | "character"
+  | "npc"
+  | "item"
+  | "ability"
+  | "custom_entity";
 
 export type WorldTemplate = {
   id: string;

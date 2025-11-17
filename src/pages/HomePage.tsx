@@ -1,10 +1,12 @@
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { listWorlds, createWorld, type World } from "../api/worlds";
-import {
-  saveWorldTemplates,
-  type TemplateDefinitionPayload,
-} from "../api/templates";
+import { createWorld, listWorlds, type World } from "../api/worlds";
+import { saveWorldTemplates, type TemplateDefinitionPayload } from "../api/templates";
+
+const makeId = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2, 10);
 
 type CharacterFeatureType =
   | "number_stat"
@@ -15,7 +17,17 @@ type CharacterFeatureType =
   | "ability_slot"
   | "custom_entity";
 
-type CharacterFeatureDraft = {
+const FEATURE_OPTIONS: { value: CharacterFeatureType; label: string }[] = [
+  { value: "number_stat", label: "Number - Stat" },
+  { value: "number_resource", label: "Number - Resource" },
+  { value: "text", label: "Text" },
+  { value: "action", label: "Action" },
+  { value: "item_slot", label: "Item Slot" },
+  { value: "ability_slot", label: "Ability Slot" },
+  { value: "custom_entity", label: "Custom Entity" },
+];
+
+type CharacterFeature = {
   id: string;
   label: string;
   type: CharacterFeatureType;
@@ -24,770 +36,552 @@ type CharacterFeatureDraft = {
   entityId?: string;
 };
 
-type TemplateFieldDraft = {
+type TemplateFieldInput = "text" | "number" | "action";
+
+type TemplateField = {
   id: string;
   label: string;
-  inputType: "text" | "number" | "action";
+  inputType: TemplateFieldInput;
 };
 
-type CustomEntityValueDraft = {
-  id: string;
-  value: string;
-  flavorText: string;
-};
-
-type CustomEntityTemplateDraft = {
+type FieldCollectionTemplate = {
   id: string;
   name: string;
-  fields: TemplateFieldDraft[];
-  values: CustomEntityValueDraft[];
+  fields: TemplateField[];
 };
 
-const FEATURE_OPTIONS: { value: CharacterFeatureType; label: string }[] = [
-  { value: "number_stat", label: "Number · Stat" },
-  { value: "number_resource", label: "Number · Resource" },
-  { value: "text", label: "Text note" },
-  { value: "action", label: "Action trigger" },
-  { value: "item_slot", label: "Item slot" },
-  { value: "ability_slot", label: "Ability slot" },
-  { value: "custom_entity", label: "Custom entity link" },
+type NPCTemplate = {
+  id: string;
+  name: string;
+  role: string;
+  notes: string;
+};
+
+type TemplateState = {
+  character: CharacterFeature[];
+  npc: NPCTemplate[];
+  item: FieldCollectionTemplate[];
+  ability: FieldCollectionTemplate[];
+  customEntities: FieldCollectionTemplate[];
+};
+
+type FieldTemplateGroup = "item" | "ability" | "customEntities";
+
+const FIELD_TYPE_OPTIONS: { value: TemplateFieldInput; label: string }[] = [
+  { value: "text", label: "Text" },
+  { value: "number", label: "Number" },
+  { value: "action", label: "Action Toggle" },
 ];
 
-function generateId() {
-  return Math.random().toString(36).slice(2, 10);
-}
-
-function defaultCharacterFeatures(): CharacterFeatureDraft[] {
+const buildDefaultFields = (group: FieldTemplateGroup): TemplateField[] => {
+  if (group === "item") {
+    return [
+      { id: makeId(), label: "Name", inputType: "text" },
+      { id: makeId(), label: "Description", inputType: "text" },
+    ];
+  }
+  if (group === "ability") {
+    return [
+      { id: makeId(), label: "Name", inputType: "text" },
+      { id: makeId(), label: "Effect", inputType: "text" },
+      { id: makeId(), label: "Cost", inputType: "number" },
+    ];
+  }
   return [
-    { id: generateId(), label: "Strength", type: "number_stat", min: 0, max: 10 },
-    { id: generateId(), label: "Agility", type: "number_stat", min: 0, max: 10 },
+    { id: makeId(), label: "Description", inputType: "text" },
+    { id: makeId(), label: "Flavor Hook", inputType: "text" },
+  ];
+};
+
+const defaultTemplates = (): TemplateState => ({
+  character: [
+    { id: makeId(), label: "Strength", type: "number_stat", min: 0, max: 10 },
+    { id: makeId(), label: "Agility", type: "number_stat", min: 0, max: 10 },
+    { id: makeId(), label: "Health", type: "number_resource", min: 0, max: 12 },
+  ],
+  npc: [
     {
-      id: generateId(),
-      label: "Health",
-      type: "number_resource",
-      min: 0,
-      max: 12,
+      id: makeId(),
+      name: "Town Guard",
+      role: "Security detail",
+      notes: "Militia posted at the city gate.",
     },
-    { id: generateId(), label: "Inventory", type: "item_slot" },
-  ];
-}
-
-function defaultItemFields(): TemplateFieldDraft[] {
-  return [
-    { id: generateId(), label: "Name", inputType: "text" },
-    { id: generateId(), label: "Description", inputType: "text" },
-  ];
-}
-
-function defaultAbilityFields(): TemplateFieldDraft[] {
-  return [
-    { id: generateId(), label: "Name", inputType: "text" },
-    { id: generateId(), label: "Effect", inputType: "text" },
-    { id: generateId(), label: "Cost", inputType: "text" },
-  ];
-}
-
-function defaultCustomEntities(): CustomEntityTemplateDraft[] {
-  return [
+  ],
+  item: [
     {
-      id: generateId(),
+      id: makeId(),
+      name: "Common Item",
+      fields: buildDefaultFields("item"),
+    },
+  ],
+  ability: [
+    {
+      id: makeId(),
+      name: "Signature Ability",
+      fields: buildDefaultFields("ability"),
+    },
+  ],
+  customEntities: [
+    {
+      id: makeId(),
       name: "Faction",
-      fields: [{ id: generateId(), label: "Description", inputType: "text" }],
-      values: [
-        {
-          id: generateId(),
-          value: "Northern Wardens",
-          flavorText: "Stoic guardians of the tundra forts.",
-        },
-      ],
+      fields: buildDefaultFields("customEntities"),
     },
-  ];
-}
-
+  ],
+});
 export function HomePage() {
   const [worlds, setWorlds] = useState<World[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [gameSystem, setGameSystem] = useState("Custom");
-  const [loading, setLoading] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const [characterTemplateName, setCharacterTemplateName] = useState("Adventurer");
-  const [characterFeatures, setCharacterFeatures] = useState<CharacterFeatureDraft[]>(
-    defaultCharacterFeatures()
-  );
-  const [itemTemplateName, setItemTemplateName] = useState("Equipment");
-  const [itemFields, setItemFields] = useState<TemplateFieldDraft[]>(defaultItemFields());
-  const [abilityTemplateName, setAbilityTemplateName] = useState("Abilities");
-  const [abilityFields, setAbilityFields] =
-    useState<TemplateFieldDraft[]>(defaultAbilityFields());
-  const [customEntities, setCustomEntities] =
-    useState<CustomEntityTemplateDraft[]>(defaultCustomEntities());
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [templates, setTemplates] = useState<TemplateState>(() => defaultTemplates());
 
   useEffect(() => {
     setLoading(true);
     listWorlds()
-      .then(setWorlds)
+      .then((data) => {
+        setWorlds(data);
+        setError(null);
+      })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, []);
 
-  const validateTemplates = (): string | null => {
-    if (characterFeatures.length === 0) {
-      return "Add at least one character feature.";
+  const customEntityOptions = useMemo(
+    () =>
+      templates.customEntities.map((entity) => ({
+        value: entity.id,
+        label: entity.name || "Custom Entity",
+      })),
+    [templates.customEntities]
+  );
+
+  const templatePayload = useMemo<TemplateDefinitionPayload[]>(() => {
+    const payload: TemplateDefinitionPayload[] = [
+      {
+        template_type: "character",
+        name: "Character Sheet",
+        definition: { features: templates.character },
+      },
+    ];
+
+    templates.npc.forEach((npc) => {
+      payload.push({
+        template_type: "npc",
+        name: npc.name.trim(),
+        definition: { role: npc.role.trim(), notes: npc.notes.trim() },
+      });
+    });
+
+    templates.item.forEach((template) => {
+      payload.push({
+        template_type: "item",
+        name: template.name.trim(),
+        definition: { fields: template.fields },
+      });
+    });
+
+    templates.ability.forEach((template) => {
+      payload.push({
+        template_type: "ability",
+        name: template.name.trim(),
+        definition: { fields: template.fields },
+      });
+    });
+
+    templates.customEntities.forEach((entity) => {
+      payload.push({
+        template_type: "custom_entity",
+        name: entity.name.trim(),
+        definition: { fields: entity.fields },
+      });
+    });
+
+    return payload;
+  }, [templates]);
+
+  const mutateFieldTemplates = (
+    group: FieldTemplateGroup,
+    updater: (items: FieldCollectionTemplate[]) => FieldCollectionTemplate[]
+  ) => {
+    setTemplates((prev) => ({
+      ...prev,
+      [group]: updater(prev[group]),
+    }));
+  };
+
+  const addFieldTemplate = (group: FieldTemplateGroup) => {
+    const labelMap: Record<FieldTemplateGroup, string> = {
+      item: "Item Template",
+      ability: "Ability Template",
+      customEntities: "Custom Entity",
+    };
+    mutateFieldTemplates(group, (items) => [
+      ...items,
+      {
+        id: makeId(),
+        name: `${labelMap[group]} ${items.length + 1}`,
+        fields: buildDefaultFields(group),
+      },
+    ]);
+  };
+
+  const handleFieldTemplateNameChange = (
+    group: FieldTemplateGroup,
+    templateId: string,
+    value: string
+  ) => {
+    mutateFieldTemplates(group, (items) =>
+      items.map((template) =>
+        template.id === templateId ? { ...template, name: value } : template
+      )
+    );
+  };
+
+  const handleFieldChange = (
+    group: FieldTemplateGroup,
+    templateId: string,
+    fieldId: string,
+    patch: Partial<TemplateField>
+  ) => {
+    mutateFieldTemplates(group, (items) =>
+      items.map((template) =>
+        template.id === templateId
+          ? {
+              ...template,
+              fields: template.fields.map((field) =>
+                field.id === fieldId ? { ...field, ...patch } : field
+              ),
+            }
+          : template
+      )
+    );
+  };
+
+  const handleAddField = (group: FieldTemplateGroup, templateId: string) => {
+    mutateFieldTemplates(group, (items) =>
+      items.map((template) =>
+        template.id === templateId
+          ? {
+              ...template,
+              fields: [
+                ...template.fields,
+                {
+                  id: makeId(),
+                  label: `Field ${template.fields.length + 1}`,
+                  inputType: "text",
+                },
+              ],
+            }
+          : template
+      )
+    );
+  };
+
+  const handleRemoveField = (
+    group: FieldTemplateGroup,
+    templateId: string,
+    fieldId: string
+  ) => {
+    mutateFieldTemplates(group, (items) =>
+      items.map((template) =>
+        template.id === templateId
+          ? {
+              ...template,
+              fields: template.fields.filter((field) => field.id !== fieldId),
+            }
+          : template
+      )
+    );
+  };
+
+  const handleRemoveFieldTemplate = (group: FieldTemplateGroup, templateId: string) => {
+    if (group === "customEntities") {
+      setTemplates((prev) => ({
+        ...prev,
+        customEntities: prev.customEntities.filter((entity) => entity.id !== templateId),
+        character: prev.character.map((feature) =>
+          feature.type === "custom_entity" && feature.entityId === templateId
+            ? { ...feature, entityId: undefined }
+            : feature
+        ),
+      }));
+      return;
     }
-    for (const feature of characterFeatures) {
-      if (!feature.label.trim()) {
-        return "All character features need labels.";
-      }
+    mutateFieldTemplates(group, (items) => items.filter((template) => template.id !== templateId));
+  };
+
+  const addCharacterFeature = () => {
+    setTemplates((prev) => ({
+      ...prev,
+      character: [
+        ...prev.character,
+        {
+          id: makeId(),
+          label: `Feature ${prev.character.length + 1}`,
+          type: "text",
+        },
+      ],
+    }));
+  };
+
+  const removeCharacterFeature = (featureId: string) => {
+    setTemplates((prev) => ({
+      ...prev,
+      character: prev.character.filter((feature) => feature.id !== featureId),
+    }));
+  };
+
+  const handleFeatureLabelChange = (featureId: string, value: string) => {
+    setTemplates((prev) => ({
+      ...prev,
+      character: prev.character.map((feature) =>
+        feature.id === featureId ? { ...feature, label: value } : feature
+      ),
+    }));
+  };
+
+  const handleFeatureTypeChange = (featureId: string, value: CharacterFeatureType) => {
+    setTemplates((prev) => {
+      const fallbackEntityId = prev.customEntities[0]?.id;
+      return {
+        ...prev,
+        character: prev.character.map((feature) => {
+          if (feature.id !== featureId) return feature;
+          const requiresRange = value === "number_stat" || value === "number_resource";
+          return {
+            ...feature,
+            type: value,
+            min: requiresRange ? feature.min ?? 0 : undefined,
+            max: requiresRange ? feature.max ?? 10 : undefined,
+            entityId:
+              value === "custom_entity" ? feature.entityId ?? fallbackEntityId : undefined,
+          };
+        }),
+      };
+    });
+  };
+
+  const handleFeatureRangeChange = (
+    featureId: string,
+    key: "min" | "max",
+    value: string
+  ) => {
+    const numeric = value === "" ? undefined : Number(value);
+    setTemplates((prev) => ({
+      ...prev,
+      character: prev.character.map((feature) =>
+        feature.id === featureId ? { ...feature, [key]: numeric } : feature
+      ),
+    }));
+  };
+
+  const handleFeatureEntityChange = (featureId: string, entityId: string) => {
+    setTemplates((prev) => ({
+      ...prev,
+      character: prev.character.map((feature) =>
+        feature.id === featureId ? { ...feature, entityId } : feature
+      ),
+    }));
+  };
+  const addNpcTemplate = () => {
+    setTemplates((prev) => ({
+      ...prev,
+      npc: [
+        ...prev.npc,
+        { id: makeId(), name: `NPC ${prev.npc.length + 1}`, role: "", notes: "" },
+      ],
+    }));
+  };
+
+  const updateNpcTemplate = (templateId: string, patch: Partial<NPCTemplate>) => {
+    setTemplates((prev) => ({
+      ...prev,
+      npc: prev.npc.map((npc) => (npc.id === templateId ? { ...npc, ...patch } : npc)),
+    }));
+  };
+
+  const removeNpcTemplate = (templateId: string) => {
+    setTemplates((prev) => ({
+      ...prev,
+      npc: prev.npc.filter((npc) => npc.id !== templateId),
+    }));
+  };
+
+  const validateBeforeCreate = (): string | null => {
+    if (!newName.trim()) return "World name is required.";
+    if (templates.character.length === 0) return "Add at least one character feature.";
+    for (const feature of templates.character) {
+      if (!feature.label.trim()) return "Each character feature needs a label.";
       if (
         (feature.type === "number_stat" || feature.type === "number_resource") &&
         (typeof feature.min !== "number" || typeof feature.max !== "number")
       ) {
-        return "Number features must include min and max.";
+        return "Number features need both minimum and maximum values.";
       }
       if (feature.type === "custom_entity" && !feature.entityId) {
-        return "Custom entity features must be linked to an entity template.";
+        return "Custom entity features must reference a custom entity template.";
       }
     }
-    for (const field of [...itemFields, ...abilityFields]) {
-      if (!field.label.trim()) {
-        return "Template fields need labels.";
-      }
+
+    if (templates.npc.length === 0) return "Add at least one NPC template.";
+    for (const npc of templates.npc) {
+      if (!npc.name.trim()) return "NPC templates need a name.";
+      if (!npc.role.trim()) return "NPC templates should describe a role.";
     }
-    for (const entity of customEntities) {
-      if (!entity.name.trim()) {
-        return "Custom entities require a name.";
+
+    const ensureFieldCollections = (
+      group: FieldTemplateGroup,
+      label: string,
+      requireEntry = true
+    ) => {
+      const collection = templates[group];
+      if (requireEntry && collection.length === 0) {
+        throw new Error(`Add at least one ${label.toLowerCase()}.`);
       }
-      if (entity.values.length === 0) {
-        return `Add at least one value to ${entity.name}.`;
-      }
-      for (const value of entity.values) {
-        if (!value.value.trim() || !value.flavorText.trim()) {
-          return `Entity ${entity.name} requires value labels and flavor text.`;
+      for (const template of collection) {
+        if (!template.name.trim()) {
+          throw new Error(`${label} requires a name.`);
+        }
+        if (template.fields.length === 0) {
+          throw new Error(`${label} must contain at least one field.`);
+        }
+        for (const field of template.fields) {
+          if (!field.label.trim()) {
+            throw new Error(`All fields inside ${label} need labels.`);
+          }
         }
       }
+    };
+
+    try {
+      ensureFieldCollections("item", "Item template");
+      ensureFieldCollections("ability", "Ability template");
+      ensureFieldCollections("customEntities", "Custom entity template");
+    } catch (err) {
+      return err instanceof Error ? err.message : "Template validation failed.";
     }
+
     return null;
   };
 
-  const buildTemplatePayload = (): TemplateDefinitionPayload[] => {
-    const base: TemplateDefinitionPayload[] = [
-      {
-        template_type: "character",
-        name: characterTemplateName || "Character",
-        definition: {
-          features: characterFeatures.map(
-            ({ id, label, type, min, max, entityId }) => ({
-              id,
-              label,
-              type,
-              min,
-              max,
-              entityId,
-            })
-          ),
-        },
-      },
-      {
-        template_type: "item",
-        name: itemTemplateName || "Item",
-        definition: {
-          fields: itemFields.map((field) => ({
-            id: field.id,
-            label: field.label,
-            inputType: field.inputType,
-          })),
-        },
-      },
-      {
-        template_type: "ability",
-        name: abilityTemplateName || "Ability",
-        definition: {
-          fields: abilityFields.map((field) => ({
-            id: field.id,
-            label: field.label,
-            inputType: field.inputType,
-          })),
-        },
-      },
-    ];
-
-    customEntities.forEach((entity) => {
-      base.push({
-        template_type: "custom_entity",
-        name: entity.name,
-        definition: {
-          fields: entity.fields,
-          values: entity.values,
-        },
-      });
-    });
-
-    return base;
+  const resetForm = () => {
+    setNewName("");
+    setGameSystem("Custom");
+    setTemplates(defaultTemplates());
   };
 
-  const handleCreate = async () => {
-    const templateIssue = validateTemplates();
-    if (templateIssue) {
-      setError(templateIssue);
+  const handleOpenReview = () => {
+    if (!newName.trim()) {
+      setError("World name is required.");
+      return;
+    }
+    setError(null);
+    setReviewOpen(true);
+  };
+
+  const handleConfirmCreate = async () => {
+    const validationError = validateBeforeCreate();
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
-    const name = newName.trim();
-    if (!name) return;
     setCreating(true);
     try {
-      const world = await createWorld(name, gameSystem.trim());
-      await saveWorldTemplates(world.id, buildTemplatePayload());
-      setWorlds((prev) => [world, ...prev]);
-      setNewName("");
-      setGameSystem("Custom");
+      const world = await createWorld(newName.trim(), gameSystem.trim() || "Custom");
+      await saveWorldTemplates(world.id, templatePayload);
+      setWorlds((prev) => [...prev, world]);
+      resetForm();
+      setReviewOpen(false);
       setError(null);
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setCreating(false);
     }
   };
 
-  const addCharacterFeature = () => {
-    setCharacterFeatures((prev) => [
-      ...prev,
-      { id: generateId(), label: "New Feature", type: "text" },
-    ]);
+  const handleCloseReview = () => {
+    if (!creating) {
+      setReviewOpen(false);
+    }
   };
-
-  const addField = (setter: Dispatch<SetStateAction<TemplateFieldDraft[]>>) => {
-    setter((prev) => [
-      ...prev,
-      { id: generateId(), label: "New Field", inputType: "text" },
-    ]);
-  };
-
-  const addCustomEntity = () => {
-    setCustomEntities((prev) => [
-      ...prev,
-      {
-        id: generateId(),
-        name: "Custom Entity",
-        fields: [{ id: generateId(), label: "Detail", inputType: "text" }],
-        values: [{ id: generateId(), value: "", flavorText: "" }],
-      },
-    ]);
-  };
-
-  const addEntityValue = (entityId: string) => {
-    setCustomEntities((prev) =>
-      prev.map((entity) =>
-        entity.id === entityId
-          ? {
-              ...entity,
-              values: [
-                ...entity.values,
-                { id: generateId(), value: "", flavorText: "" },
-              ],
-            }
-          : entity
-      )
-    );
-  };
-
   return (
-    <div className="p-6 space-y-6">
-      <header>
-        <h1 className="text-2xl font-bold mb-1">TTRPG Manager</h1>
+    <div className="max-w-5xl mx-auto space-y-6 p-6">
+      <header className="space-y-1">
+        <h1 className="text-2xl font-bold text-slate-100">RPG Manager</h1>
         <p className="text-sm text-slate-400">
-          Create a world, then lock in character, item, ability, and entity templates.
+          Define worlds, then lock their character, NPC, item, ability, and custom entity templates.
         </p>
       </header>
 
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">
-          World blueprint
+      {error && (
+        <div className="rounded border border-red-500/40 bg-red-500/5 px-3 py-2 text-sm text-red-300">
+          {error}
+        </div>
+      )}
+
+      <section className="space-y-3 border border-slate-800 rounded-lg p-4 bg-slate-950/40">
+        <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wide">
+          World basics
         </h2>
-        <div className="flex flex-col sm:flex-row gap-2">
+        <p className="text-xs text-slate-500">
+          Templates are configured in the confirmation modal. The inventory system is global, so it
+          is not part of the character template.
+        </p>
+        <div className="flex flex-col gap-2 sm:flex-row">
           <input
             className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
             placeholder="World name"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") handleCreate();
+              if (e.key === "Enter") handleOpenReview();
             }}
           />
           <input
-            className="w-full sm:w-48 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-            placeholder="System (D&D 5e, PF2e, Custom...)"
+            className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+            placeholder="Game system (Custom, D&D 5e...)"
             value={gameSystem}
             onChange={(e) => setGameSystem(e.target.value)}
           />
           <button
-            onClick={handleCreate}
-            disabled={creating || !newName.trim()}
-            className="px-4 py-2 rounded bg-sky-600 text-sm disabled:opacity-50"
+            onClick={handleOpenReview}
+            disabled={!newName.trim() || creating}
+            className="primary-button"
           >
-            {creating ? "Creating..." : "Create"}
+            {creating ? "Working..." : "Create world"}
           </button>
         </div>
       </section>
 
-      <section className="space-y-4 border border-slate-800 rounded-lg p-4 bg-slate-950/60">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-200">
-            Character template
-          </h3>
-          <p className="text-xs text-slate-500">
-            Define the sheet all player characters will use.
-          </p>
-        </div>
-        <input
-          className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-          value={characterTemplateName}
-          onChange={(e) => setCharacterTemplateName(e.target.value)}
-          placeholder="Template name"
-        />
-        <div className="space-y-2">
-          {characterFeatures.map((feature) => (
-            <div
-              key={feature.id}
-              className="grid md:grid-cols-5 gap-2 items-center text-sm"
-            >
-              <input
-                className="col-span-2 rounded border border-slate-700 bg-slate-900 px-3 py-2"
-                value={feature.label}
-                onChange={(e) =>
-                  setCharacterFeatures((prev) =>
-                    prev.map((item) =>
-                      item.id === feature.id
-                        ? { ...item, label: e.target.value }
-                        : item
-                    )
-                  )
-                }
-              />
-              <select
-                className="rounded border border-slate-700 bg-slate-900 px-3 py-2"
-                value={feature.type}
-                onChange={(e) =>
-                  setCharacterFeatures((prev) =>
-                    prev.map((item) =>
-                      item.id === feature.id
-                        ? { ...item, type: e.target.value as CharacterFeatureType }
-                        : item
-                    )
-                  )
-                }
-              >
-                {FEATURE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {(feature.type === "number_stat" ||
-                feature.type === "number_resource") && (
-                <div className="flex gap-2 text-xs items-center">
-                  <input
-                    type="number"
-                    placeholder="Min"
-                    value={feature.min ?? ""}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1"
-                    onChange={(e) =>
-                      setCharacterFeatures((prev) =>
-                        prev.map((item) =>
-                          item.id === feature.id
-                            ? { ...item, min: Number(e.target.value) }
-                            : item
-                        )
-                      )
-                    }
-                  />
-                  <input
-                    type="number"
-                    placeholder="Max"
-                    value={feature.max ?? ""}
-                    className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1"
-                    onChange={(e) =>
-                      setCharacterFeatures((prev) =>
-                        prev.map((item) =>
-                          item.id === feature.id
-                            ? { ...item, max: Number(e.target.value) }
-                            : item
-                        )
-                      )
-                    }
-                  />
-                </div>
-              )}
-              {feature.type === "custom_entity" && (
-                <select
-                  className="rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs"
-                  value={feature.entityId ?? ""}
-                  onChange={(e) =>
-                    setCharacterFeatures((prev) =>
-                      prev.map((item) =>
-                        item.id === feature.id
-                          ? { ...item, entityId: e.target.value }
-                          : item
-                      )
-                    )
-                  }
-                >
-                  <option value="">Select entity</option>
-                  {customEntities.map((entity) => (
-                    <option key={entity.id} value={entity.id}>
-                      {entity.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <button
-                className="text-xs text-red-300"
-                onClick={() =>
-                  setCharacterFeatures((prev) =>
-                    prev.filter((item) => item.id !== feature.id)
-                  )
-                }
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-          <button
-            className="text-xs text-sky-300"
-            onClick={addCharacterFeature}
-          >
-            + Add feature
-          </button>
-        </div>
-      </section>
-
-      <div className="grid md:grid-cols-2 gap-4">
-        <section className="space-y-3 border border-slate-800 rounded-lg p-4 bg-slate-950/60">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-200">Item template</h3>
-            <p className="text-xs text-slate-500">Define fields for equipment items.</p>
-          </div>
-          <input
-            className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-            value={itemTemplateName}
-            onChange={(e) => setItemTemplateName(e.target.value)}
-          />
-          {itemFields.map((field) => (
-            <div key={field.id} className="flex gap-2 text-sm">
-              <input
-                className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2"
-                value={field.label}
-                onChange={(e) =>
-                  setItemFields((prev) =>
-                    prev.map((item) =>
-                      item.id === field.id ? { ...item, label: e.target.value } : item
-                    )
-                  )
-                }
-              />
-              <select
-                className="rounded border border-slate-700 bg-slate-900 px-2 py-2 text-xs"
-                value={field.inputType}
-                onChange={(e) =>
-                  setItemFields((prev) =>
-                    prev.map((item) =>
-                      item.id === field.id ? { ...item, inputType: e.target.value as TemplateFieldDraft["inputType"] } : item
-                    )
-                  )
-                }
-              >
-                <option value="text">Text</option>
-                <option value="number">Number</option>
-                <option value="action">Action</option>
-              </select>
-              <button
-                className="text-xs text-red-300"
-                onClick={() =>
-                  setItemFields((prev) => prev.filter((item) => item.id !== field.id))
-                }
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-          <button
-            className="text-xs text-sky-300"
-            onClick={() => addField(setItemFields)}
-          >
-            + Add field
-          </button>
-        </section>
-
-        <section className="space-y-3 border border-slate-800 rounded-lg p-4 bg-slate-950/60">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-200">
-              Ability template
-            </h3>
-            <p className="text-xs text-slate-500">Capture actions, spells, or powers.</p>
-          </div>
-          <input
-            className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-            value={abilityTemplateName}
-            onChange={(e) => setAbilityTemplateName(e.target.value)}
-          />
-          {abilityFields.map((field) => (
-            <div key={field.id} className="flex gap-2 text-sm">
-              <input
-                className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2"
-                value={field.label}
-                onChange={(e) =>
-                  setAbilityFields((prev) =>
-                    prev.map((item) =>
-                      item.id === field.id ? { ...item, label: e.target.value } : item
-                    )
-                  )
-                }
-              />
-              <select
-                className="rounded border border-slate-700 bg-slate-900 px-2 py-2 text-xs"
-                value={field.inputType}
-                onChange={(e) =>
-                  setAbilityFields((prev) =>
-                    prev.map((item) =>
-                      item.id === field.id ? { ...item, inputType: e.target.value as TemplateFieldDraft["inputType"] } : item
-                    )
-                  )
-                }
-              >
-                <option value="text">Text</option>
-                <option value="number">Number</option>
-                <option value="action">Action</option>
-              </select>
-              <button
-                className="text-xs text-red-300"
-                onClick={() =>
-                  setAbilityFields((prev) =>
-                    prev.filter((item) => item.id !== field.id)
-                  )
-                }
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-          <button
-            className="text-xs text-sky-300"
-            onClick={() => addField(setAbilityFields)}
-          >
-            + Add field
-          </button>
-        </section>
-      </div>
-
-      <section className="space-y-4 border border-slate-800 rounded-lg p-4 bg-slate-950/60">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-200">
-              Custom entities
-            </h3>
-            <p className="text-xs text-slate-500">
-              Build entity taxonomies (houses, elements, factions) with flavor text.
-            </p>
-          </div>
-          <button
-            className="text-xs text-sky-300"
-            onClick={addCustomEntity}
-          >
-            + Add custom entity
-          </button>
-        </div>
-        {customEntities.map((entity) => (
-          <div key={entity.id} className="border border-slate-800 rounded p-3 space-y-3">
-            <div className="flex items-center gap-2">
-              <input
-                className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-                value={entity.name}
-                onChange={(e) =>
-                  setCustomEntities((prev) =>
-                    prev.map((item) =>
-                      item.id === entity.id ? { ...item, name: e.target.value } : item
-                    )
-                  )
-                }
-              />
-              <button
-                className="text-xs text-red-300"
-                onClick={() =>
-                  setCustomEntities((prev) =>
-                    prev.filter((item) => item.id !== entity.id)
-                  )
-                }
-              >
-                Remove
-              </button>
-            </div>
-            <div className="space-y-2 text-xs">
-              <p className="text-slate-400 font-semibold">Fields</p>
-              {entity.fields.map((field) => (
-                <div key={field.id} className="flex gap-2">
-                  <input
-                    className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2"
-                    value={field.label}
-                    onChange={(e) =>
-                      setCustomEntities((prev) =>
-                        prev.map((item) =>
-                          item.id === entity.id
-                            ? {
-                                ...item,
-                                fields: item.fields.map((f) =>
-                                  f.id === field.id ? { ...f, label: e.target.value } : f
-                                ),
-                              }
-                            : item
-                        )
-                      )
-                    }
-                  />
-                  <button
-                    className="text-red-300"
-                    onClick={() =>
-                      setCustomEntities((prev) =>
-                        prev.map((item) =>
-                          item.id === entity.id
-                            ? {
-                                ...item,
-                                fields: item.fields.filter((f) => f.id !== field.id),
-                              }
-                            : item
-                        )
-                      )
-                    }
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-              <button
-                className="text-sky-300"
-                onClick={() =>
-                  setCustomEntities((prev) =>
-                    prev.map((item) =>
-                      item.id === entity.id
-                        ? {
-                            ...item,
-                            fields: [
-                              ...item.fields,
-                              { id: generateId(), label: "Detail", inputType: "text" },
-                            ],
-                          }
-                        : item
-                    )
-                  )
-                }
-              >
-                + Field
-              </button>
-            </div>
-            <div className="space-y-2">
-              <p className="text-xs text-slate-400 font-semibold">Values & flavor text</p>
-              {entity.values.map((value) => (
-                <div key={value.id} className="grid md:grid-cols-2 gap-2 text-xs">
-                  <input
-                    className="rounded border border-slate-700 bg-slate-900 px-3 py-2"
-                    placeholder="Value (e.g., Ashen Order)"
-                    value={value.value}
-                    onChange={(e) =>
-                      setCustomEntities((prev) =>
-                        prev.map((item) =>
-                          item.id === entity.id
-                            ? {
-                                ...item,
-                                values: item.values.map((v) =>
-                                  v.id === value.id ? { ...v, value: e.target.value } : v
-                                ),
-                              }
-                            : item
-                        )
-                      )
-                    }
-                  />
-                  <input
-                    className="rounded border border-slate-700 bg-slate-900 px-3 py-2"
-                    placeholder="Flavor text"
-                    value={value.flavorText}
-                    onChange={(e) =>
-                      setCustomEntities((prev) =>
-                        prev.map((item) =>
-                          item.id === entity.id
-                            ? {
-                                ...item,
-                                values: item.values.map((v) =>
-                                  v.id === value.id
-                                    ? { ...v, flavorText: e.target.value }
-                                    : v
-                                ),
-                              }
-                            : item
-                        )
-                      )
-                    }
-                  />
-                  <button
-                    className="text-left text-red-300"
-                    onClick={() =>
-                      setCustomEntities((prev) =>
-                        prev.map((item) =>
-                          item.id === entity.id
-                            ? {
-                                ...item,
-                                values: item.values.filter((v) => v.id !== value.id),
-                              }
-                            : item
-                        )
-                      )
-                    }
-                  >
-                    Remove value
-                  </button>
-                </div>
-              ))}
-              <button
-                className="text-xs text-sky-300"
-                onClick={() => addEntityValue(entity.id)}
-              >
-                + Value
-              </button>
-            </div>
-          </div>
-        ))}
-      </section>
-
-      <section className="space-y-3">
+      <section className="space-y-3 border border-slate-800 rounded-lg p-4">
         <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">
-          Worlds
+          Existing worlds
         </h2>
-
-        {loading && <p className="text-sm text-slate-400">Loading worlds…</p>}
-        {error && <p className="text-sm text-red-400">Error: {error}</p>}
-
-        {worlds.length === 0 && !loading && (
-          <p className="text-sm text-slate-500">
-            No worlds yet. Create one to get started.
-          </p>
+        {loading && <p className="text-sm text-slate-400">Loading worlds...</p>}
+        {!loading && worlds.length === 0 && (
+          <p className="text-sm text-slate-500">No worlds yet. Create one above.</p>
         )}
-
         <ul className="space-y-2">
-          {worlds.map((w) => (
+          {worlds.map((world) => (
             <li
-              key={w.id}
-              className="flex items-center justify-between rounded border border-slate-800 px-3 py-2 hover:border-sky-500"
+              key={world.id}
+              className="flex items-center justify-between rounded border border-slate-800 px-3 py-2 hover:border-sky-500/60"
             >
               <div>
-                <p className="text-sm font-medium">{w.name}</p>
+                <p className="text-sm font-medium text-slate-100">{world.name}</p>
                 <p className="text-xs text-slate-500">
-                  {w.game_system || "System: n/a"}
+                  {world.game_system || "System not specified"}
                 </p>
               </div>
               <Link
-                to={`/world/${w.id}/overview`}
-                className="text-xs px-3 py-1 rounded bg-slate-800 hover:bg-slate-700"
+                to={`/world/${world.id}/overview`}
+                className="text-xs rounded bg-slate-800 px-3 py-1 hover:bg-slate-700"
               >
                 Open
               </Link>
@@ -795,6 +589,414 @@ export function HomePage() {
           ))}
         </ul>
       </section>
+      {reviewOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 px-3 py-6 sm:items-center">
+          <div className="w-full max-w-5xl rounded-lg border border-slate-800 bg-slate-950 shadow-2xl max-h-[90vh] overflow-y-auto p-6 space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-100">
+                  Confirm templates for {newName || "New World"}
+                </h3>
+                <p className="text-sm text-slate-400">
+                  Adjust every template before saving. Changes apply only to this world.
+                </p>
+              </div>
+              <button
+                className="text-xs px-3 py-1 rounded bg-slate-800 hover:bg-slate-700"
+                onClick={handleCloseReview}
+                disabled={creating}
+              >
+                Close
+              </button>
+            </div>
+
+            <section className="space-y-3">
+              <header>
+                <h4 className="text-sm font-semibold text-slate-200">
+                  Character template (shared by all PCs)
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Include stats, resources, actions, ability/item slots, or references to custom
+                  entities. Inventory is managed separately and not listed here.
+                </p>
+              </header>
+              <div className="space-y-3">
+                {templates.character.map((feature) => (
+                  <div
+                    key={feature.id}
+                    className="rounded border border-slate-800 bg-slate-900/40 p-3 space-y-3"
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                        placeholder="Feature label"
+                        value={feature.label}
+                        onChange={(e) => handleFeatureLabelChange(feature.id, e.target.value)}
+                      />
+                      <select
+                        className="w-full sm:w-48 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                        value={feature.type}
+                        onChange={(e) =>
+                          handleFeatureTypeChange(
+                            feature.id,
+                            e.target.value as CharacterFeatureType
+                          )
+                        }
+                      >
+                        {FEATURE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {(feature.type === "number_stat" ||
+                      feature.type === "number_resource") && (
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <input
+                          type="number"
+                          className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          placeholder="Min"
+                          value={feature.min ?? ""}
+                          onChange={(e) => handleFeatureRangeChange(feature.id, "min", e.target.value)}
+                        />
+                        <input
+                          type="number"
+                          className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          placeholder="Max"
+                          value={feature.max ?? ""}
+                          onChange={(e) => handleFeatureRangeChange(feature.id, "max", e.target.value)}
+                        />
+                      </div>
+                    )}
+
+                    {feature.type === "custom_entity" && (
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <select
+                          className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          value={feature.entityId ?? ""}
+                          onChange={(e) => handleFeatureEntityChange(feature.id, e.target.value)}
+                        >
+                          <option value="">Select custom entity</option>
+                          {customEntityOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-xs text-slate-500 sm:w-48">
+                          Custom entities display per-character flavor text later.
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="text-right">
+                      <button
+                        className="text-xs text-red-300"
+                        onClick={() => removeCharacterFeature(feature.id)}
+                      >
+                        Remove feature
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <button className="text-xs text-sky-300" onClick={addCharacterFeature}>
+                  + Add feature
+                </button>
+              </div>
+            </section>
+            <section className="space-y-3">
+              <header>
+                <h4 className="text-sm font-semibold text-slate-200">NPC templates</h4>
+                <p className="text-xs text-slate-500">
+                  Store labeled archetypes for townsfolk, factions, or monsters.
+                </p>
+              </header>
+              <div className="space-y-3">
+                {templates.npc.map((npc) => (
+                  <div
+                    key={npc.id}
+                    className="rounded border border-slate-800 bg-slate-900/40 p-3 space-y-2"
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                        placeholder="NPC name"
+                        value={npc.name}
+                        onChange={(e) => updateNpcTemplate(npc.id, { name: e.target.value })}
+                      />
+                      <input
+                        className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                        placeholder="Role / label"
+                        value={npc.role}
+                        onChange={(e) => updateNpcTemplate(npc.id, { role: e.target.value })}
+                      />
+                    </div>
+                    <textarea
+                      className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                      rows={3}
+                      placeholder="Notes, stat blocks, quirks..."
+                      value={npc.notes}
+                      onChange={(e) => updateNpcTemplate(npc.id, { notes: e.target.value })}
+                    />
+                    <div className="text-right">
+                      <button
+                        className="text-xs text-red-300"
+                        onClick={() => removeNpcTemplate(npc.id)}
+                      >
+                        Remove NPC
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <button className="text-xs text-sky-300" onClick={addNpcTemplate}>
+                  + Add NPC template
+                </button>
+              </div>
+            </section>
+            <section className="space-y-3">
+              <header>
+                <h4 className="text-sm font-semibold text-slate-200">Item templates</h4>
+                <p className="text-xs text-slate-500">
+                  Build as many item blueprints as you need. Each field becomes an input when
+                  recording an item later.
+                </p>
+              </header>
+              {templates.item.map((template) => (
+                <div
+                  key={template.id}
+                  className="rounded border border-slate-800 bg-slate-900/40 p-3 space-y-3"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                      placeholder="Template name"
+                      value={template.name}
+                      onChange={(e) =>
+                        handleFieldTemplateNameChange("item", template.id, e.target.value)
+                      }
+                    />
+                    <button
+                      className="text-xs text-red-300"
+                      onClick={() => handleRemoveFieldTemplate("item", template.id)}
+                    >
+                      Remove template
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {template.fields.map((field) => (
+                      <div key={field.id} className="flex flex-col gap-2 sm:flex-row">
+                        <input
+                          className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          placeholder="Field label"
+                          value={field.label}
+                          onChange={(e) =>
+                            handleFieldChange("item", template.id, field.id, { label: e.target.value })
+                          }
+                        />
+                        <select
+                          className="w-full sm:w-40 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          value={field.inputType}
+                          onChange={(e) =>
+                            handleFieldChange("item", template.id, field.id, {
+                              inputType: e.target.value as TemplateFieldInput,
+                            })
+                          }
+                        >
+                          {FIELD_TYPE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="text-xs text-red-300 sm:w-24"
+                          disabled={template.fields.length === 1}
+                          onClick={() => handleRemoveField("item", template.id, field.id)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    className="text-xs text-sky-300"
+                    onClick={() => handleAddField("item", template.id)}
+                  >
+                    + Field
+                  </button>
+                </div>
+              ))}
+              <button className="text-xs text-sky-300" onClick={() => addFieldTemplate("item")}>
+                + Add item template
+              </button>
+            </section>
+
+            <section className="space-y-3">
+              <header>
+                <h4 className="text-sm font-semibold text-slate-200">Ability templates</h4>
+                <p className="text-xs text-slate-500">
+                  Ability templates capture things like spell write ups or combat moves.
+                </p>
+              </header>
+              {templates.ability.map((template) => (
+                <div
+                  key={template.id}
+                  className="rounded border border-slate-800 bg-slate-900/40 p-3 space-y-3"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                      placeholder="Ability template name"
+                      value={template.name}
+                      onChange={(e) =>
+                        handleFieldTemplateNameChange("ability", template.id, e.target.value)
+                      }
+                    />
+                    <button
+                      className="text-xs text-red-300"
+                      onClick={() => handleRemoveFieldTemplate("ability", template.id)}
+                    >
+                      Remove template
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {template.fields.map((field) => (
+                      <div key={field.id} className="flex flex-col gap-2 sm:flex-row">
+                        <input
+                          className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          placeholder="Field label"
+                          value={field.label}
+                          onChange={(e) =>
+                            handleFieldChange(
+                              "ability",
+                              template.id,
+                              field.id,
+                              { label: e.target.value }
+                            )
+                          }
+                        />
+                        <select
+                          className="w-full sm:w-40 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          value={field.inputType}
+                          onChange={(e) =>
+                            handleFieldChange("ability", template.id, field.id, {
+                              inputType: e.target.value as TemplateFieldInput,
+                            })
+                          }
+                        >
+                          {FIELD_TYPE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="text-xs text-red-300 sm:w-24"
+                          disabled={template.fields.length === 1}
+                          onClick={() => handleRemoveField("ability", template.id, field.id)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    className="text-xs text-sky-300"
+                    onClick={() => handleAddField("ability", template.id)}
+                  >
+                    + Field
+                  </button>
+                </div>
+              ))}
+              <button className="text-xs text-sky-300" onClick={() => addFieldTemplate("ability")}>
+                + Add ability template
+              </button>
+            </section>
+            <section className="space-y-3">
+              <header>
+                <h4 className="text-sm font-semibold text-slate-200">Custom entity templates</h4>
+                <p className="text-xs text-slate-500">
+                  Custom entities (factions, elements, schools, etc.) always have a required name.
+                  Use these fields for extra descriptors. Flavor text is entered per entity later.
+                </p>
+              </header>
+              {templates.customEntities.map((entity) => (
+                <div
+                  key={entity.id}
+                  className="rounded border border-slate-800 bg-slate-900/40 p-3 space-y-3"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                      placeholder="Custom entity type (Faction, Element...)"
+                      value={entity.name}
+                      onChange={(e) =>
+                        handleFieldTemplateNameChange("customEntities", entity.id, e.target.value)
+                      }
+                    />
+                    <button
+                      className="text-xs text-red-300"
+                      onClick={() => handleRemoveFieldTemplate("customEntities", entity.id)}
+                    >
+                      Remove template
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {entity.fields.map((field) => (
+                      <div key={field.id} className="flex flex-col gap-2 sm:flex-row">
+                        <input
+                          className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          placeholder="Descriptor label"
+                          value={field.label}
+                          onChange={(e) =>
+                            handleFieldChange("customEntities", entity.id, field.id, {
+                              label: e.target.value,
+                            })
+                          }
+                        />
+                        <button
+                          className="text-xs text-red-300 sm:w-24"
+                          disabled={entity.fields.length === 1}
+                          onClick={() => handleRemoveField("customEntities", entity.id, field.id)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    className="text-xs text-sky-300"
+                    onClick={() => handleAddField("customEntities", entity.id)}
+                  >
+                    + Descriptor field
+                  </button>
+                  <p className="text-[11px] text-slate-500">
+                    Each entity created later must also include a unique flavor text entry that does
+                    not live in the template.
+                  </p>
+                </div>
+              ))}
+              <button
+                className="text-xs text-sky-300"
+                onClick={() => addFieldTemplate("customEntities")}
+              >
+                + Add custom entity template
+              </button>
+            </section>
+
+            <div className="flex justify-end gap-2">
+              <button className="secondary-button" onClick={handleCloseReview} disabled={creating}>
+                Back
+              </button>
+              <button className="primary-button" onClick={handleConfirmCreate} disabled={creating}>
+                {creating ? "Saving..." : "Confirm and save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
