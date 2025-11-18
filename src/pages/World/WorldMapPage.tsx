@@ -13,7 +13,7 @@ const MAP_DEFAULT_SIZE = 96;
 const DEFAULT_WATER_LEVEL = 0.42;
 const MAP_SIZE_CHOICES = [64, 96, 128, 160];
 const TILE_BASE = 28;
-const MIN_ZOOM = 0.6;
+const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2.5;
 const SNAP_THRESHOLD = 0.025;
 
@@ -463,9 +463,9 @@ function applyBrushToMap(
       const idx = y * width + x;
       const falloff = 1 - distance / brushRadius;
       if (action === "raise") {
-        copy.relief[idx] = clamp(copy.relief[idx] + falloff * 0.02);
+        copy.relief[idx] = clamp(copy.relief[idx] + falloff * 0.01);
       } else if (action === "lower") {
-        copy.relief[idx] = clamp(copy.relief[idx] - falloff * 0.02);
+        copy.relief[idx] = clamp(copy.relief[idx] - falloff * 0.01);
       } else {
         copy.relief[idx] = clamp(copy.relief[idx] + (BIOME_TARGETS[biome].relief - copy.relief[idx]) * falloff);
         copy.moisture[idx] = clamp(
@@ -492,20 +492,82 @@ function buildRoadPath(map: MapState, from: MapCity, to: MapCity) {
     const currentY = from.y + (to.y - from.y) * t;
     path.push({ x: currentX, y: currentY });
   }
+
+  // If no map provided, fall back to straight line
+  if (!map) return path;
+
+  const width = map.width;
+  const height = map.height;
+
+  const sampleRelief = (p: PixelPoint) => {
+    const gx = clamp(p.x, 0, 0.9999) * (width - 1);
+    const gy = clamp(p.y, 0, 0.9999) * (height - 1);
+    const idx = Math.round(gy) * width + Math.round(gx);
+    return map.relief[Math.max(0, Math.min(map.relief.length - 1, idx))] ?? 0;
+  };
+
+  // Parameters controlling smoothing and penalty behavior
+  const RELIEF_CHANGE_THRESHOLD = 0.08; // small changes under this are tolerated
+  const SMOOTH_PASSES = 6; // number of smoothing iterations
+  const BASE_SMOOTH_FACTOR = 0.5; // how much we move toward neighbor average when penalized
+
+  // Iteratively smooth points where relief changes are large, and strongly penalize
+  // back-to-back (sign-changing) relief deltas to avoid sharp up-down sequences.
+  for (let pass = 0; pass < SMOOTH_PASSES; pass += 1) {
+    // don't touch endpoints (they anchor to city positions)
+    for (let i = 1; i < path.length - 1; i += 1) {
+      const prev = path[i - 1];
+      const cur = path[i];
+      const next = path[i + 1];
+
+      const rPrev = sampleRelief(prev);
+      const rCur = sampleRelief(cur);
+      const rNext = sampleRelief(next);
+
+      const d1 = rCur - rPrev;
+      const d2 = rNext - rCur;
+
+      // magnitude of relief change around this point
+      const mag = Math.max(Math.abs(d1), Math.abs(d2));
+
+      if (mag <= RELIEF_CHANGE_THRESHOLD) {
+        // small changes — no special smoothing needed
+        continue;
+      }
+
+      // detect back-to-back (sign change) steep transitions (e.g., up then down)
+      const signChange = d1 * d2 < 0 ? 1 : 0;
+
+      // penalty scales with how much over the threshold we are and increases if sign changes
+      const penalty = Math.min(1, (mag - RELIEF_CHANGE_THRESHOLD) / (1 - RELIEF_CHANGE_THRESHOLD));
+      const moveAmount = Math.min(1, BASE_SMOOTH_FACTOR * (0.5 + penalty) * (1 + signChange * 1.2));
+
+      // move current point toward the average of its neighbors to reduce sharp relief deltas
+      const avgX = (prev.x + next.x) * 0.5;
+      const avgY = (prev.y + next.y) * 0.5;
+      cur.x = cur.x * (1 - moveAmount) + avgX * moveAmount;
+      cur.y = cur.y * (1 - moveAmount) + avgY * moveAmount;
+    }
+  }
+
   return path;
 }
 
 function findAttachmentTarget(map: MapState, city: MapCity) {
-  let bestCity: MapCity | null = null;
+  let bestCity: MapCity = {...city};
   let bestDist = Infinity;
   map.cities.forEach((existing) => {
     const d = distance({ x: existing.x, y: existing.y }, { x: city.x, y: city.y });
     if (d < bestDist) {
       bestDist = d;
       bestCity = existing;
+    } else if (d === bestDist && bestCity) {
+      if (existing.population > bestCity.population) {
+        bestCity = existing;
+      }
     }
   });
-  if (bestCity) {
+  if (bestCity.id !== city.id) {
     return {
       type: "city" as const,
       id: bestCity.id,
@@ -615,7 +677,7 @@ export function WorldMapPage() {
   const [isPanning, setIsPanning] = useState(false);
   const [isBrushing, setIsBrushing] = useState(false);
   const [roadDraftStart, setRoadDraftStart] = useState<
-    (PixelPoint & { label: string }) | null
+    (PixelPoint & { label: string, targetId: string }) | null
   >(null);
   const [desiredSize, setDesiredSize] = useState(MAP_DEFAULT_SIZE);
   const [saving, setSaving] = useState(false);
@@ -774,7 +836,7 @@ export function WorldMapPage() {
     if (!mapState) return;
     const next = generateProceduralMap(Date.now(), mapState.water_level, desiredSize, desiredSize);
     setMapState(next);
-    setStatusMessage(`Rebuilt map at ${desiredSize} × ${desiredSize}.`);
+    setStatusMessage(`Rebuilt map at ${desiredSize} x ${desiredSize}.`);
   };
 
   const screenToMapPoint = useCallback(
@@ -1241,7 +1303,7 @@ export function WorldMapPage() {
           className="text-xs px-3 py-1.5 rounded-full border border-grove-700 bg-grove-900/80 hover:text-white"
           onClick={() => setViewMode((prev) => (prev === "iso" ? "grid" : "iso"))}
         >
-          {viewMode === "iso" ? "Iso view" : "Grid view"}
+          Change view
         </button>
       </div>
 
