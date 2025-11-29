@@ -83,6 +83,10 @@ pub struct MapState {
     pub seed: u64,
     pub cities: Vec<MapCity>,
     pub roads: Vec<MapRoad>,
+    #[serde(default)]
+    pub temperature: Vec<f32>,
+    #[serde(default)]
+    pub vegetation: Vec<f32>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
