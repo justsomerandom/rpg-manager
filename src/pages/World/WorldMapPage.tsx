@@ -97,6 +97,8 @@ type MapStateExtended = MapState & {
   vegetation: number[];
 };
 
+type OverlayMode = "biomes" | "relief" | "temperature" | "vegetation";
+
 const BRUSH_ACTIONS: ReadonlySet<PrimaryAction> = new Set<PrimaryAction>([
   "paint-biome",
   "raise-relief",
@@ -493,7 +495,13 @@ function drawIsometricMap(
   pan: PanVector,
   viewport: { width: number; height: number },
   highlightCityId?: string | null,
-  roadDraftStart?: PixelPoint | null
+  roadDraftStart?: PixelPoint | null,
+  overlayMode: OverlayMode = "biomes",
+  overlayRanges?: {
+    relief?: { min: number; max: number };
+    temperature?: { min: number; max: number };
+    vegetation?: { min: number; max: number };
+  }
 ) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
@@ -525,8 +533,26 @@ function drawIsometricMap(
       ctx.lineTo(isoX, isoY + tileHeight);
       ctx.lineTo(isoX - tileWidth / 2, isoY + tileHeight / 2);
       ctx.closePath();
-      ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
+      const baseColor = `rgb(${color[0]},${color[1]},${color[2]})`;
+      ctx.fillStyle = baseColor;
       ctx.fill();
+
+      if (overlayMode !== "biomes" && overlayRanges) {
+        let overlay: string | null = null;
+        if (overlayMode === "relief" && overlayRanges.relief) {
+          overlay = reliefOverlayColor(map, map.relief[idx], overlayRanges.relief);
+        } else if (overlayMode === "temperature" && overlayRanges.temperature) {
+          overlay = temperatureOverlayColor(map.temperature[idx], overlayRanges.temperature);
+        } else if (overlayMode === "vegetation" && overlayRanges.vegetation) {
+          overlay = vegetationOverlayColor(map.vegetation[idx], overlayRanges.vegetation);
+        }
+        if (overlay) {
+          ctx.save();
+          ctx.fillStyle = overlay;
+          ctx.fill();
+          ctx.restore();
+        }
+      }
       ctx.strokeStyle = "rgba(8,25,19,0.35)";
       ctx.stroke();
     }
@@ -589,7 +615,13 @@ function drawGridMap(
   pan: PanVector,
   viewport: { width: number; height: number },
   highlightCityId?: string | null,
-  roadDraftStart?: PixelPoint | null
+  roadDraftStart?: PixelPoint | null,
+  overlayMode: OverlayMode = "biomes",
+  overlayRanges?: {
+    relief?: { min: number; max: number };
+    temperature?: { min: number; max: number };
+    vegetation?: { min: number; max: number };
+  }
 ) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
@@ -614,6 +646,20 @@ function drawGridMap(
       const py = y * cellSize + pan.y;
       ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
       ctx.fillRect(px, py, cellSize + 1, cellSize + 1);
+      if (overlayMode !== "biomes" && overlayRanges) {
+        let overlay: string | null = null;
+        if (overlayMode === "relief" && overlayRanges.relief) {
+          overlay = reliefOverlayColor(map, map.relief[idx], overlayRanges.relief);
+        } else if (overlayMode === "temperature" && overlayRanges.temperature) {
+          overlay = temperatureOverlayColor(map.temperature[idx], overlayRanges.temperature);
+        } else if (overlayMode === "vegetation" && overlayRanges.vegetation) {
+          overlay = vegetationOverlayColor(map.vegetation[idx], overlayRanges.vegetation);
+        }
+        if (overlay) {
+          ctx.fillStyle = overlay;
+          ctx.fillRect(px, py, cellSize + 1, cellSize + 1);
+        }
+      }
     }
   }
 
@@ -777,6 +823,28 @@ function distance(a: PixelPoint, b: PixelPoint) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+function computeReliefRange(map: MapStateExtended) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 0; i < map.relief.length; i += 1) {
+    const v = map.relief[i];
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  return { min, max };
+}
+
+function computeRange(values: number[]) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 0; i < values.length; i += 1) {
+    const v = values[i];
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  return { min, max };
+}
+
 function sampleRelief(map: MapStateExtended, point: PixelPoint) {
   const width = map.width;
   const height = map.height;
@@ -792,6 +860,26 @@ function sampleRelief(map: MapStateExtended, point: PixelPoint) {
   const v10 = map.relief[y0 * width + x1];
   const v01 = map.relief[y1 * width + x0];
   const v11 = map.relief[y1 * width + x1];
+  const i1 = lerp(v00, v10, sx);
+  const i2 = lerp(v01, v11, sx);
+  return lerp(i1, i2, sy);
+}
+
+function sampleVegetation(map: MapStateExtended, point: PixelPoint) {
+  const width = map.width;
+  const height = map.height;
+  const x = clamp(point.x, 0, 0.9999) * (width - 1);
+  const y = clamp(point.y, 0, 0.9999) * (height - 1);
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.min(width - 1, x0 + 1);
+  const y1 = Math.min(height - 1, y0 + 1);
+  const sx = x - x0;
+  const sy = y - y0;
+  const v00 = map.vegetation[y0 * width + x0] ?? 0;
+  const v10 = map.vegetation[y0 * width + x1] ?? 0;
+  const v01 = map.vegetation[y1 * width + x0] ?? 0;
+  const v11 = map.vegetation[y1 * width + x1] ?? 0;
   const i1 = lerp(v00, v10, sx);
   const i2 = lerp(v01, v11, sx);
   return lerp(i1, i2, sy);
@@ -821,23 +909,189 @@ function sampleSlope(map: MapStateExtended, point: PixelPoint) {
   };
 }
 
+function sampleVegetationGradient(map: MapStateExtended, point: PixelPoint) {
+  const eps = 1 / Math.min(map.width, map.height);
+  const forward = sampleVegetation(map, {
+    x: clamp(point.x + eps, 0, 0.9999),
+    y: point.y,
+  });
+  const backward = sampleVegetation(map, {
+    x: clamp(point.x - eps, 0, 0.9999),
+    y: point.y,
+  });
+  const up = sampleVegetation(map, {
+    x: point.x,
+    y: clamp(point.y - eps, 0, 0.9999),
+  });
+  const down = sampleVegetation(map, {
+    x: point.x,
+    y: clamp(point.y + eps, 0, 0.9999),
+  });
+  return {
+    dx: forward - backward,
+    dy: down - up,
+  };
+}
+
+function isWaterCell(map: MapStateExtended, x: number, y: number) {
+  const idx = y * map.width + x;
+  return map.relief[idx] <= map.water_level;
+}
+
+function reliefOverlayColor(
+  map: MapStateExtended,
+  reliefValue: number,
+  range: { min: number; max: number }
+) {
+  const seaLevel = map.water_level;
+  const min = Math.min(range.min, seaLevel);
+  const max = Math.max(range.max, seaLevel + 0.0001);
+  const t = clamp((reliefValue - seaLevel) / (max - seaLevel), 0, 1);
+  const hue = lerp(220, 20, t); // deep blue to warm amber
+  const light = lerp(25, 70, t);
+  const sat = lerp(70, 90, t);
+  return `hsla(${hue}, ${sat}%, ${light}%, 0.95)`;
+}
+
+function temperatureOverlayColor(value: number, range: { min: number; max: number }) {
+  const t = clamp((value - range.min) / (range.max - range.min || 1), 0, 1);
+  const hue = lerp(210, 5, t); // cold blue to hot red
+  const sat = 80;
+  const light = lerp(30, 70, t);
+  return `hsla(${hue}, ${sat}%, ${light}%, 0.95)`;
+}
+
+function vegetationOverlayColor(value: number, range: { min: number; max: number }) {
+  const t = clamp((value - range.min) / (range.max - range.min || 1), 0, 1);
+  const hue = lerp(35, 130, t); // dry earth to lush green
+  const sat = lerp(70, 85, t);
+  const light = lerp(25, 65, t);
+  return `hsla(${hue}, ${sat}%, ${light}%, 0.95)`;
+}
+
 function buildRoadBetweenAnchors(
   map: MapStateExtended,
   from: PixelPoint,
   to: PixelPoint
 ) {
-  const steps = 28;
-  const points: PixelPoint[] = [];
-  for (let i = 0; i <= steps; i += 1) {
-    const t = i / steps;
-    let x = lerp(from.x, to.x, t);
-    let y = lerp(from.y, to.y, t);
-    const slope = sampleSlope(map, { x, y });
-    x -= slope.dx * 0.015;
-    y -= slope.dy * 0.015;
-    points.push({ x: clamp(x, 0, 0.9999), y: clamp(y, 0, 0.9999) });
+  const width = map.width;
+  const height = map.height;
+  const startX = clamp(from.x, 0, 0.9999) * (width - 1);
+  const startY = clamp(from.y, 0, 0.9999) * (height - 1);
+  const endX = clamp(to.x, 0, 0.9999) * (width - 1);
+  const endY = clamp(to.y, 0, 0.9999) * (height - 1);
+
+  const start = { x: Math.round(startX), y: Math.round(startY) };
+  const goal = { x: Math.round(endX), y: Math.round(endY) };
+
+  const maxBridgeCells = 2;
+
+  const gScore = new Map<string, number>();
+  const fScore = new Map<string, number>();
+  const cameFrom = new Map<string, { x: number; y: number }>();
+  const waterRun = new Map<string, number>();
+
+  const key = (x: number, y: number) => `${x},${y}`;
+  const heuristic = (x: number, y: number) => Math.hypot(goal.x - x, goal.y - y);
+  const reliefAt = (x: number, y: number) => map.relief[y * width + x];
+  const vegetationAt = (x: number, y: number) => map.vegetation[y * width + x] ?? 0;
+
+  const open: Array<{ x: number; y: number }> = [start];
+  gScore.set(key(start.x, start.y), 0);
+  fScore.set(key(start.x, start.y), heuristic(start.x, start.y));
+  waterRun.set(key(start.x, start.y), isWaterCell(map, start.x, start.y) ? 1 : 0);
+
+  while (open.length > 0) {
+    // Find node with lowest fScore.
+    let currentIndex = 0;
+    let currentBest = open[0];
+    let currentBestF = fScore.get(key(currentBest.x, currentBest.y)) ?? Infinity;
+    for (let i = 1; i < open.length; i += 1) {
+      const node = open[i];
+      const score = fScore.get(key(node.x, node.y)) ?? Infinity;
+      if (score < currentBestF) {
+        currentBest = node;
+        currentBestF = score;
+        currentIndex = i;
+      }
+    }
+
+    const currentKey = key(currentBest.x, currentBest.y);
+    open.splice(currentIndex, 1);
+
+    if (currentBest.x === goal.x && currentBest.y === goal.y) {
+      // Reconstruct path.
+      const path: PixelPoint[] = [];
+      let iterKey: string | undefined = currentKey;
+      while (iterKey) {
+        const [ix, iy] = iterKey.split(",").map(Number);
+        path.push({
+          x: (ix + 0.5) / width,
+          y: (iy + 0.5) / height,
+        });
+        const prev = cameFrom.get(iterKey);
+        iterKey = prev ? key(prev.x, prev.y) : undefined;
+      }
+      return path.reverse();
+    }
+
+    const currentRelief = reliefAt(currentBest.x, currentBest.y);
+    const prev = cameFrom.get(currentKey);
+    const prevRelief = prev ? reliefAt(prev.x, prev.y) : currentRelief;
+    const currentWaterRun = waterRun.get(currentKey) ?? 0;
+
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = currentBest.x + dx;
+        const ny = currentBest.y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+
+        const diagonal = dx !== 0 && dy !== 0;
+        const stepBase = diagonal ? Math.SQRT2 : 1;
+        const nextRelief = reliefAt(nx, ny);
+        const slopeDiff = Math.abs(nextRelief - currentRelief);
+        const continuous =
+          Math.sign(nextRelief - currentRelief) === Math.sign(currentRelief - prevRelief) &&
+          Math.abs(nextRelief - currentRelief) > 0.01;
+        const vegetation = vegetationAt(nx, ny);
+
+        const nextIsWater = isWaterCell(map, nx, ny);
+        const nextWaterRun = nextIsWater ? currentWaterRun + 1 : 0;
+        if (nextIsWater && nextWaterRun > maxBridgeCells) continue;
+
+        const slopePenalty = slopeDiff * 18;
+        const continuousPenalty = continuous ? Math.abs(nextRelief - currentRelief) * 30 : 0;
+        const vegetationPenalty = vegetation * 6;
+        const waterPenalty = nextIsWater ? 80 * nextWaterRun : 0;
+
+        const tentativeG =
+          (gScore.get(currentKey) ?? Infinity) +
+          stepBase +
+          slopePenalty +
+          continuousPenalty +
+          vegetationPenalty +
+          waterPenalty;
+
+        const neighborKey = key(nx, ny);
+        if (tentativeG < (gScore.get(neighborKey) ?? Infinity)) {
+          cameFrom.set(neighborKey, { x: currentBest.x, y: currentBest.y });
+          gScore.set(neighborKey, tentativeG);
+          fScore.set(neighborKey, tentativeG + heuristic(nx, ny) * 1.1);
+          waterRun.set(neighborKey, nextWaterRun);
+          if (!open.find((node) => node.x === nx && node.y === ny)) {
+            open.push({ x: nx, y: ny });
+          }
+        }
+      }
+    }
   }
-  return points;
+
+  // Fallback: straight line if no path found.
+  return [
+    { x: clamp(from.x, 0, 0.9999), y: clamp(from.y, 0, 0.9999) },
+    { x: clamp(to.x, 0, 0.9999), y: clamp(to.y, 0, 0.9999) },
+  ];
 }
 
 function findAttachmentTarget(map: MapStateExtended, city: MapCity): NetworkAnchor | null {
@@ -997,6 +1251,7 @@ export function WorldMapPage() {
   const [isPanning, setIsPanning] = useState(false);
   const [isBrushing, setIsBrushing] = useState(false);
   const [roadDraftStart, setRoadDraftStart] = useState<NetworkAnchor | null>(null);
+  const [overlayMode, setOverlayMode] = useState<OverlayMode>("biomes");
   const [desiredSize, setDesiredSize] = useState(MAP_DEFAULT_SIZE);
   const [saving, setSaving] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -1082,12 +1337,52 @@ export function WorldMapPage() {
     if (!mapState) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const reliefRange = computeReliefRange(mapState);
+    const temperatureRange = computeRange(mapState.temperature);
+    const vegetationRange = computeRange(mapState.vegetation);
+    const overlayRanges =
+      overlayMode === "biomes"
+        ? undefined
+        : {
+            relief: reliefRange,
+            temperature: temperatureRange,
+            vegetation: vegetationRange,
+          };
     if (viewMode === "iso") {
-      drawIsometricMap(canvas, mapState, zoom, panOffset, viewportSize, selectedCity?.id, roadDraftStart ?? undefined);
+      drawIsometricMap(
+        canvas,
+        mapState,
+        zoom,
+        panOffset,
+        viewportSize,
+        selectedCity?.id,
+        roadDraftStart ?? undefined,
+        overlayMode,
+        overlayRanges
+      );
     } else {
-      drawGridMap(canvas, mapState, zoom, panOffset, viewportSize, selectedCity?.id, roadDraftStart ?? undefined);
+      drawGridMap(
+        canvas,
+        mapState,
+        zoom,
+        panOffset,
+        viewportSize,
+        selectedCity?.id,
+        roadDraftStart ?? undefined,
+        overlayMode,
+        overlayRanges
+      );
     }
-  }, [mapState, zoom, panOffset, viewportSize, selectedCity, roadDraftStart, viewMode]);
+  }, [
+    mapState,
+    zoom,
+    panOffset,
+    viewportSize,
+    selectedCity,
+    roadDraftStart,
+    viewMode,
+    overlayMode,
+  ]);
 
   const mapInfo = useMemo(() => {
     if (!mapState) return null;
@@ -1342,6 +1637,19 @@ export function WorldMapPage() {
           >
             {viewMode === "iso" ? "Isometric" : "Top-down"}
           </button>
+        </label>
+        <label className="flex items-center justify-between gap-4">
+          <span>Overlay</span>
+          <select
+            className="px-3 py-1 rounded border border-earth-clay/40 bg-black/40 text-xs"
+            value={overlayMode}
+            onChange={(event) => setOverlayMode(event.target.value as OverlayMode)}
+          >
+            <option value="biomes">Biomes</option>
+            <option value="relief">Relief</option>
+            <option value="temperature">Temperature</option>
+            <option value="vegetation">Vegetation</option>
+          </select>
         </label>
         <label className="flex items-center justify-between gap-4">
           <span>Zoom</span>
