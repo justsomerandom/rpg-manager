@@ -30,6 +30,16 @@ export type CityBuilding = {
 
 export type CitySize = "village" | "town" | "city" | "megapolis";
 
+export type CityDistrict = {
+  id: string;
+  name: string;
+  kind: "centre" | "market" | "downtown" | "ward" | "edge" | "outskirts";
+  x: number;
+  y: number;
+  radius: number;
+  color: string;
+};
+
 export type CityMap = {
   city_id: string;
   size_label: CitySize;
@@ -40,6 +50,7 @@ export type CityMap = {
   road_architecture?: "ring" | "grid" | "star" | "organic";
   road_theme?: "western" | "mediterranean" | "nordic" | "elvish" | "dwarven" | "imperial" | "scifi" | "cyberpunk";
   external_connections?: number[];
+  districts?: CityDistrict[];
   roads: CityRoad[];
   buildings: CityBuilding[];
 };

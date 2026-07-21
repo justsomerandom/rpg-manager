@@ -939,14 +939,18 @@ function buildRoadBetweenAnchors(
         if (nextIsWater && nextWaterRun > maxBridgeCells) continue;
 
         // Grade is direction-neutral: ascents and descents both avoid steep cells.
+        const altitudePenalty = Math.max(0, nextRelief - 0.64) ** 2 * 95;
         const slopePenalty = slopeDiff * slopeDiff * 165 + Math.max(0, slopeDiff - 0.035) * 24;
         const vegetationPenalty = vegetation * 1.25;
-        const waterPenalty = nextIsWater ? 80 * nextWaterRun : 0;
+        // Water is treated as an exceptional bridge choice: only a dramatically
+        // shorter route can outweigh it, and continuous crossings remain capped.
+        const waterPenalty = nextIsWater ? 900 * nextWaterRun : 0;
 
         const tentativeG =
           (gScore.get(currentKey) ?? Infinity) +
           stepBase +
           slopePenalty +
+          altitudePenalty +
           vegetationPenalty +
           waterPenalty;
 
@@ -1502,6 +1506,7 @@ export function WorldMapPage() {
   };
 
   const handlePointerDown = (event: MouseEvent<HTMLCanvasElement>) => {
+    if (cityEditorCity) return;
     if (event.button === 2) {
       setIsPanning(true);
       lastPanRef.current = { x: event.clientX, y: event.clientY };

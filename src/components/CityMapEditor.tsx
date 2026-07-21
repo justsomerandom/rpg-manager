@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CityMap, CityRoad, CityRoadPoint, CitySize } from "../api/cityMap";
+import type { CityDistrict, CityMap, CityRoad, CityRoadPoint, CitySize } from "../api/cityMap";
 import { getCityMap, saveCityMap } from "../api/cityMap";
 import type { MapCity } from "../api/worldMap";
 import { ROAD_THEMES, roadName, type RoadTheme } from "./cityRoadNames";
@@ -53,6 +53,18 @@ function point(radius: number, angle: number) {
   return { id: randomId(), x: clamp(0.5 + Math.cos(angle) * radius), y: clamp(0.5 + Math.sin(angle) * radius) };
 }
 
+function generateDistricts(size: CitySize, scale: number, architecture: RoadArchitecture): CityDistrict[] {
+  const count = Math.max(2, Math.min(7, Math.round(({ village: 2, town: 3, city: 5, megapolis: 7 }[size]) * scale)));
+  const kinds: CityDistrict["kind"][] = size === "village" ? ["market", "centre", "outskirts"] : size === "town" ? ["market", "centre", "ward", "edge"] : ["downtown", "centre", "ward", "ward", "edge", "outskirts", "outskirts"];
+  const colors = ["#38bdf8", "#facc15", "#a78bfa", "#fb7185", "#34d399", "#fb923c", "#94a3b8"];
+  return Array.from({ length: count }, (_, index) => {
+    const angle = architecture === "grid" ? (index % 2 ? Math.PI / 2 : 0) + Math.PI * (index / count) : (Math.PI * 2 * index) / count;
+    const radius = index === 0 ? 0.12 : 0.18 + (index % 3) * 0.075;
+    const kind = kinds[index % kinds.length];
+    return { id: randomId(), name: kind === "downtown" ? "Downtown" : kind === "market" ? "Market quarter" : `${kind[0].toUpperCase()}${kind.slice(1)} district`, kind, x: 0.5 + Math.cos(angle) * radius, y: 0.5 + Math.sin(angle) * radius, radius: 0.12 + (index % 2) * 0.025, color: colors[index % colors.length] };
+  });
+}
+
 function generateCityMap(city: MapCity, size: CitySize, scale = 1, seed = Date.now(), architecture: RoadArchitecture = "ring", theme: RoadTheme = "elvish", externalConnections: number[] = []): CityMap {
   const sizeMeta = CITY_SIZES.find((s) => s.key === size) ?? CITY_SIZES[0];
   const rng = pseudoRandom(seed);
@@ -89,8 +101,10 @@ function generateCityMap(city: MapCity, size: CitySize, scale = 1, seed = Date.n
     const t = rng(); const x = a.x + (b.x - a.x) * t; const y = a.y + (b.y - a.y) * t;
     const dx = b.x - a.x; const dy = b.y - a.y; const length = Math.hypot(dx, dy) || 1;
     const tier = road.tier ?? 1; const setback = 0.012 + tier * 0.003;
-    const side = rng() > 0.5 ? 1 : -1; const width = 0.009 + rng() * 0.01; const height = width * (0.7 + rng() * 1.3);
-    return { id: randomId(), name: "Residence", kind: "private" as const, x: clamp(x + (-dy / length) * setback * side), y: clamp(y + (dx / length) * setback * side), footprint: width, width, height, rotation: Math.atan2(dy, dx) };
+    const side = rng() > 0.5 ? 1 : -1; const bx = clamp(x + (-dy / length) * setback * side); const by = clamp(y + (dx / length) * setback * side);
+    const centreDistance = Math.hypot(bx - 0.5, by - 0.5); const kind: "private" | "market" | "utility" = centreDistance < 0.16 && rng() < 0.22 ? "market" : centreDistance > radius * 0.72 && rng() < 0.16 ? "utility" : "private";
+    const width = (kind === "market" ? 0.018 : kind === "utility" ? 0.015 : 0.009) + rng() * (kind === "private" ? 0.01 : 0.015); const height = width * (0.7 + rng() * 1.3);
+    return { id: randomId(), name: kind === "market" ? "Commercial" : kind === "utility" ? "Industry" : "Residence", kind, x: bx, y: by, footprint: width, width, height, rotation: Math.atan2(dy, dx) };
   });
 
   return {
@@ -98,7 +112,7 @@ function generateCityMap(city: MapCity, size: CitySize, scale = 1, seed = Date.n
     size_label: size,
     width: 1,
     height: 1,
-    seed, scale, road_architecture: architecture, road_theme: theme, external_connections: externalConnections,
+    seed, scale, road_architecture: architecture, road_theme: theme, external_connections: externalConnections, districts: generateDistricts(size, scale, architecture),
     roads,
     buildings,
   };
@@ -144,6 +158,7 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
   const [selectedResidenceId, setSelectedResidenceId] = useState<string | null>(null);
   const [residentTag, setResidentTag] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showDistricts, setShowDistricts] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -184,6 +199,7 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
     if (!mapData || !placingBuilding) return;
     setMapData(placeSpecialBuilding(mapData, placingBuilding));
     setPlacingBuilding(null);
+    setShowDistricts(false);
     setBuildingName(`${city.name} Hall`);
   };
 
@@ -315,6 +331,7 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                     </radialGradient>
                   </defs>
                   <rect x={0} y={0} width={1} height={1} fill="url(#city-bg)" />
+                  {showDistricts && mapData.districts?.map((district) => <g key={district.id}><circle cx={district.x} cy={district.y} r={district.radius} fill={district.color} opacity="0.16" stroke={district.color} strokeWidth="0.003" /><text x={district.x} y={district.y} textAnchor="middle" fontSize="0.018" fill="#f8fafc">{district.name}</text></g>)}
                   {mapData.roads.map((road) => (
                     <polyline
                       key={road.id}
@@ -462,12 +479,17 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                       role: specialType,
                       district,
                     });
+                    setShowDistricts(true);
                     setStatus("Click on the map to place the building.");
                   }}
                   className="text-xs px-3 py-2 rounded bg-emerald-600 text-white"
                 >
                   Add special building
                 </button>
+              </div>
+              <div className="flex items-center justify-between rounded-lg border border-grove-700 bg-grove-800/40 px-3 py-2 text-xs">
+                <span>{mapData?.districts?.length ?? 0} location districts</span>
+                <div className="flex gap-2"><button type="button" onClick={() => setShowDistricts((value) => !value)} className="text-brand-glow">{showDistricts ? "Hide overlay" : "Show overlay"}</button><button type="button" onClick={() => setMapData((current) => current ? { ...current, districts: generateDistricts(current.size_label, current.scale ?? 1, current.road_architecture ?? "ring") } : current)} className="text-earth-sand">Regenerate</button><button type="button" onClick={() => setMapData((current) => current ? { ...current, districts: [] } : current)} className="text-red-300">Remove</button></div>
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <select className="rounded border border-slate-700 bg-slate-900 px-2 py-2" value={specialType} onChange={(e) => setSpecialType(e.target.value)}>

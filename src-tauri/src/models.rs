@@ -147,6 +147,8 @@ pub struct CityMap {
     pub road_theme: String,
     #[serde(default)]
     pub external_connections: Vec<f64>,
+    #[serde(default)]
+    pub districts: Vec<serde_json::Value>,
     pub roads: Vec<CityRoad>,
     pub buildings: Vec<CityBuilding>,
 }
