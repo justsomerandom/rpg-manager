@@ -33,6 +33,8 @@ export type CityMap = {
   height: number;
   seed: number;
   scale?: number;
+  road_architecture?: "ring" | "grid" | "star" | "organic";
+  road_theme?: "western" | "fantasy" | "scifi";
   roads: CityRoad[];
   buildings: CityBuilding[];
 };

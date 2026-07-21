@@ -133,11 +133,17 @@ pub struct CityMap {
     pub seed: u64,
     #[serde(default = "default_city_scale")]
     pub scale: f64,
+    #[serde(default = "default_city_architecture")]
+    pub road_architecture: String,
+    #[serde(default = "default_city_theme")]
+    pub road_theme: String,
     pub roads: Vec<CityRoad>,
     pub buildings: Vec<CityBuilding>,
 }
 
 fn default_city_scale() -> f64 { 1.0 }
+fn default_city_architecture() -> String { "ring".into() }
+fn default_city_theme() -> String { "fantasy".into() }
 
 #[derive(Serialize)]
 pub struct LoreBook {

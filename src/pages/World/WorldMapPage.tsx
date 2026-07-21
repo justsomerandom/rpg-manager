@@ -236,20 +236,8 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
   });
   drawCoastlineGlimmer(map, ctx, cellSize);
 
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = "rgba(255,255,255,0.04)";
-  ctx.beginPath();
-  for (let gx = 0; gx <= map.width; gx += 1) {
-    const px = gx * cellSize;
-    ctx.moveTo(px, 0);
-    ctx.lineTo(px, height);
-  }
-  for (let gy = 0; gy <= map.height; gy += 1) {
-    const py = gy * cellSize;
-    ctx.moveTo(0, py);
-    ctx.lineTo(width, py);
-  }
-  ctx.stroke();
+  // Compiled maps are cartographic images, not editor grids. Boundary paths
+  // above provide the landmass definition without exposing source tiles.
 
   ctx.lineWidth = 2;
   ctx.strokeStyle = "rgba(224,196,128,0.9)";
@@ -451,9 +439,25 @@ async function drawCompiledIso(map: MapStateExtended): Promise<string> {
   return canvas.toDataURL("image/png");
 }
 
+// Kept temporarily as a reusable editor renderer; baked previews use the shared top-down source.
+void drawCompiledIso;
+
 async function generateCompiledRenders(map: MapStateExtended): Promise<CompiledRenders> {
   const extended = ensureExtendedMap(map);
-  const [grid, iso] = await Promise.all([drawCompiledGrid(extended), drawCompiledIso(extended)]);
+  const grid = await drawCompiledGrid(extended);
+  // The alternate asset is intentionally a rotated version of the same
+  // cartographic render, keeping every feature and label in sync with top-down.
+  const image = await loadIcon(grid);
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalHeight || 1;
+  canvas.height = image.naturalWidth || 1;
+  const ctx = canvas.getContext("2d");
+  if (ctx && image.naturalWidth) {
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(Math.PI / 2);
+    ctx.drawImage(image, -image.naturalWidth / 2, -image.naturalHeight / 2);
+  }
+  const iso = ctx && image.naturalWidth ? canvas.toDataURL("image/png") : grid;
   return { grid, iso };
 }
 
@@ -1166,7 +1170,7 @@ export function WorldMapPage() {
   const [toolGroup, setToolGroup] = useState<ToolGroup>("general");
   const [reliefAction, setReliefAction] = useState<"raise" | "lower">("raise");
   const [locationAction, setLocationAction] = useState<PrimaryAction>("navigate");
-  const [viewMode, setViewMode] = useState<ViewMode>("iso");
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [draftCityName, setDraftCityName] = useState("New City");
   const [compiledView, setCompiledView] = useState(true);
   const compiledPreferenceRef = useRef(false);
@@ -1212,6 +1216,10 @@ export function WorldMapPage() {
       setRoadDraftStart(null);
     }
   }, [toolGroup]);
+
+  useEffect(() => {
+    if (viewMode !== "grid") setViewMode("grid");
+  }, [viewMode]);
 
   useEffect(() => {
     if (compiledView) {

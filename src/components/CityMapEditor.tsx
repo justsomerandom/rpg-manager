@@ -144,7 +144,7 @@ export function CityMapEditor({ city, onClose }: Props) {
     return () => {
       mounted = false;
     };
-  }, [city]);
+  }, [city.id]);
 
   const sizeMeta = useMemo(
     () => CITY_SIZES.find((s) => s.key === mapData?.size_label) ?? CITY_SIZES[1],
