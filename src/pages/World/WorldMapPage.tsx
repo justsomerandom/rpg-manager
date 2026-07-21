@@ -1357,6 +1357,25 @@ export function WorldMapPage() {
     () => `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
     [panOffset.x, panOffset.y, zoom]
   );
+  const cityExternalConnections = useMemo(() => {
+    if (!mapState || !cityEditorCity) return [];
+    return mapState.roads.flatMap((road) => {
+      if (road.points.length < 2) return [];
+      const first = road.points[0];
+      const last = road.points[road.points.length - 1];
+      const cityAtStart = road.from_city_id === cityEditorCity.id || distance(first, cityEditorCity) < 0.025;
+      const cityAtEnd = road.to_city_id === cityEditorCity.id || distance(last, cityEditorCity) < 0.025;
+      if (cityAtStart) {
+        const next = road.points[1];
+        return [Math.atan2(next.y - first.y, next.x - first.x)];
+      }
+      if (cityAtEnd) {
+        const previous = road.points[road.points.length - 2];
+        return [Math.atan2(previous.y - last.y, previous.x - last.x)];
+      }
+      return [];
+    });
+  }, [mapState, cityEditorCity]);
 
   const handleGenerateMap = () => {
     setMapState(
@@ -2148,7 +2167,7 @@ export function WorldMapPage() {
         </div>
       </div>
       {cityEditorCity ? (
-        <CityMapEditor city={cityEditorCity} onClose={() => setCityEditorCity(null)} />
+        <CityMapEditor city={cityEditorCity} externalConnections={cityExternalConnections} onClose={() => setCityEditorCity(null)} />
       ) : null}
     </div>
   );

@@ -108,6 +108,8 @@ pub struct CityRoad {
     pub name: String,
     pub importance: String,
     pub points: Vec<CityRoadPoint>,
+    #[serde(default)]
+    pub tier: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -122,6 +124,12 @@ pub struct CityBuilding {
     pub role: Option<String>,
     #[serde(default)]
     pub district: Option<String>,
+    #[serde(default)]
+    pub width: Option<f64>,
+    #[serde(default)]
+    pub height: Option<f64>,
+    #[serde(default)]
+    pub rotation: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -137,6 +145,8 @@ pub struct CityMap {
     pub road_architecture: String,
     #[serde(default = "default_city_theme")]
     pub road_theme: String,
+    #[serde(default)]
+    pub external_connections: Vec<f64>,
     pub roads: Vec<CityRoad>,
     pub buildings: Vec<CityBuilding>,
 }

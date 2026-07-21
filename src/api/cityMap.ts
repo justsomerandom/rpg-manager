@@ -10,6 +10,7 @@ export type CityRoad = {
   id: string;
   name: string;
   importance: "main" | "secondary" | "alley";
+  tier?: 1 | 2 | 3 | 4 | 5;
   points: CityRoadPoint[];
 };
 
@@ -20,6 +21,9 @@ export type CityBuilding = {
   x: number;
   y: number;
   footprint: number;
+  width?: number;
+  height?: number;
+  rotation?: number;
   role?: string;
   district?: "centre" | "midtown" | "edge" | "outskirts";
 };
@@ -34,7 +38,8 @@ export type CityMap = {
   seed: number;
   scale?: number;
   road_architecture?: "ring" | "grid" | "star" | "organic";
-  road_theme?: "western" | "fantasy" | "scifi";
+  road_theme?: "western" | "mediterranean" | "nordic" | "elvish" | "dwarven" | "imperial" | "scifi" | "cyberpunk";
+  external_connections?: number[];
   roads: CityRoad[];
   buildings: CityBuilding[];
 };

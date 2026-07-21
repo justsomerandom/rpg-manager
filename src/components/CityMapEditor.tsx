@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import type { CityMap, CityRoad, CityRoadPoint, CitySize } from "../api/cityMap";
 import { getCityMap, saveCityMap } from "../api/cityMap";
 import type { MapCity } from "../api/worldMap";
+import { ROAD_THEMES, roadName, type RoadTheme } from "./cityRoadNames";
 
 type Props = {
   city: MapCity;
+  externalConnections?: number[];
   onClose: () => void;
 };
 
@@ -33,6 +35,7 @@ type PendingBuilding = {
 
 type District = "centre" | "midtown" | "edge" | "outskirts";
 const SPECIAL_TYPES = ["Palace / keep", "Temple", "Market hall", "Guildhall", "Barracks", "Library", "Harbour", "Academy"];
+type RoadArchitecture = "ring" | "grid" | "star" | "organic";
 
 function randomId() {
   return Math.random().toString(36).slice(2, 9);
@@ -50,7 +53,7 @@ function point(radius: number, angle: number) {
   return { id: randomId(), x: clamp(0.5 + Math.cos(angle) * radius), y: clamp(0.5 + Math.sin(angle) * radius) };
 }
 
-function generateCityMap(city: MapCity, size: CitySize, scale = 1, seed = Date.now()): CityMap {
+function generateCityMap(city: MapCity, size: CitySize, scale = 1, seed = Date.now(), architecture: RoadArchitecture = "ring", theme: RoadTheme = "elvish", externalConnections: number[] = []): CityMap {
   const sizeMeta = CITY_SIZES.find((s) => s.key === size) ?? CITY_SIZES[0];
   const rng = pseudoRandom(seed);
   const roads: CityRoad[] = [];
@@ -58,22 +61,36 @@ function generateCityMap(city: MapCity, size: CitySize, scale = 1, seed = Date.n
   const radius = clamp(0.23 + scale * 0.14, 0.28, 0.46);
   for (let i = 0; i < avenues; i += 1) {
     const angle = (Math.PI * 2 * i) / avenues + (rng() - 0.5) * 0.18;
+    const tier = (size === "village" ? 1 : Math.min(5, 2 + Math.floor(i / Math.max(1, avenues / 3)))) as 1 | 2 | 3 | 4 | 5;
+    const gridOffset = ((i / Math.max(1, avenues - 1)) - 0.5) * radius * 1.7;
+    const points = architecture === "grid"
+      ? i % 2 === 0
+        ? [{ id: randomId(), x: 0.5 + gridOffset, y: 0.5 - radius }, { id: randomId(), x: 0.5 + gridOffset, y: 0.5 + radius }]
+        : [{ id: randomId(), x: 0.5 - radius, y: 0.5 + gridOffset }, { id: randomId(), x: 0.5 + radius, y: 0.5 + gridOffset }]
+      : [point(architecture === "star" ? 0.01 : 0.08, angle), point(radius * 0.48, angle + (architecture === "organic" ? (rng() - 0.5) * 0.35 : 0)), point(radius, angle)];
     roads.push({
       id: randomId(),
-      name: `Radial Avenue ${i + 1}`,
+      name: roadName(theme, i, tier),
       importance: "main",
-      points: [point(0.025, angle), point(radius * 0.42, angle + (rng() - 0.5) * 0.12), point(radius, angle)],
+      tier,
+      points,
     });
   }
-  const rings = scale > 1.05 ? 2 : 1;
+  const rings = architecture === "ring" ? (scale > 1.05 ? 2 : 1) : 0;
   for (let ring = 1; ring <= rings; ring += 1) {
     const ringRadius = radius * (ring / (rings + 1));
-    roads.push({ id: randomId(), name: ring === 1 ? "Market Ring" : "Outer Ring", importance: "secondary", points: Array.from({ length: avenues + 1 }, (_, i) => point(ringRadius, (Math.PI * 2 * i) / avenues)) });
+    roads.push({ id: randomId(), name: roadName(theme, ring + avenues, 2), importance: "secondary", tier: Math.min(3, ring + 1) as 1 | 2 | 3, points: Array.from({ length: avenues + 1 }, (_, i) => point(ringRadius, (Math.PI * 2 * i) / avenues)) });
   }
-  const buildings = Array.from({ length: Math.round(sizeMeta.fillers * scale) }, () => {
-    const angle = rng() * Math.PI * 2;
-    const spread = 0.06 + Math.sqrt(rng()) * radius * 0.92;
-    return { id: randomId(), name: "Residence", kind: "private" as const, x: clamp(0.5 + Math.cos(angle) * spread), y: clamp(0.5 + Math.sin(angle) * spread), footprint: 0.009 + rng() * 0.008 };
+  externalConnections.forEach((angle, index) => roads.push({ id: randomId(), name: roadName(theme, avenues + index, 4), importance: "main", tier: (size === "megapolis" ? 5 : 3) as 3 | 5, points: [point(radius, angle), point(0.5, angle)] }));
+  const buildings = Array.from({ length: Math.round(sizeMeta.fillers * scale) }, (_, index) => {
+    const road = roads[index % roads.length];
+    const a = road.points[Math.min(road.points.length - 2, Math.floor(rng() * Math.max(1, road.points.length - 1)))];
+    const b = road.points[Math.min(road.points.length - 1, road.points.indexOf(a) + 1)];
+    const t = rng(); const x = a.x + (b.x - a.x) * t; const y = a.y + (b.y - a.y) * t;
+    const dx = b.x - a.x; const dy = b.y - a.y; const length = Math.hypot(dx, dy) || 1;
+    const tier = road.tier ?? 1; const setback = 0.012 + tier * 0.003;
+    const side = rng() > 0.5 ? 1 : -1; const width = 0.009 + rng() * 0.01; const height = width * (0.7 + rng() * 1.3);
+    return { id: randomId(), name: "Residence", kind: "private" as const, x: clamp(x + (-dy / length) * setback * side), y: clamp(y + (dx / length) * setback * side), footprint: width, width, height, rotation: Math.atan2(dy, dx) };
   });
 
   return {
@@ -81,7 +98,7 @@ function generateCityMap(city: MapCity, size: CitySize, scale = 1, seed = Date.n
     size_label: size,
     width: 1,
     height: 1,
-    seed, scale,
+    seed, scale, road_architecture: architecture, road_theme: theme, external_connections: externalConnections,
     roads,
     buildings,
   };
@@ -113,7 +130,7 @@ function placeSpecialBuilding(map: CityMap, pending: PendingBuilding, rngSeed = 
   return { ...map, buildings };
 }
 
-export function CityMapEditor({ city, onClose }: Props) {
+export function CityMapEditor({ city, externalConnections = [], onClose }: Props) {
   const [mapData, setMapData] = useState<CityMap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -124,6 +141,8 @@ export function CityMapEditor({ city, onClose }: Props) {
     useState<(typeof BUILDING_TYPES)[number]["key"]>("public");
   const [specialType, setSpecialType] = useState(SPECIAL_TYPES[0]);
   const [district, setDistrict] = useState<District>("centre");
+  const [selectedResidenceId, setSelectedResidenceId] = useState<string | null>(null);
+  const [residentTag, setResidentTag] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -135,7 +154,7 @@ export function CityMapEditor({ city, onClose }: Props) {
         if (existing) {
           setMapData(existing);
         } else {
-          setMapData(generateCityMap(city, "town"));
+          setMapData(generateCityMap(city, "town", 1, Date.now(), "ring", "elvish", externalConnections));
         }
         setError(null);
       })
@@ -145,6 +164,16 @@ export function CityMapEditor({ city, onClose }: Props) {
       mounted = false;
     };
   }, [city.id]);
+
+  useEffect(() => {
+    setMapData((current) => {
+      if (!current) return current;
+      const previous = current.external_connections ?? [];
+      if (previous.length === externalConnections.length && previous.every((angle, index) => Math.abs(angle - externalConnections[index]) < 0.01)) return current;
+      const rebuilt = generateCityMap(city, current.size_label, current.scale ?? 1, current.seed, current.road_architecture ?? "ring", (current.road_theme ?? "elvish") as RoadTheme, externalConnections);
+      return { ...rebuilt, buildings: [...rebuilt.buildings, ...current.buildings.filter((building) => building.role || building.kind !== "private")] };
+    });
+  }, [city, externalConnections]);
 
   const sizeMeta = useMemo(
     () => CITY_SIZES.find((s) => s.key === mapData?.size_label) ?? CITY_SIZES[1],
@@ -161,21 +190,30 @@ export function CityMapEditor({ city, onClose }: Props) {
   const handleRandomizeRoads = () => {
     if (!mapData) return;
     const seed = Date.now();
-    setMapData(generateCityMap(city, mapData.size_label, mapData.scale ?? 1, seed));
+    setMapData(generateCityMap(city, mapData.size_label, mapData.scale ?? 1, seed, mapData.road_architecture ?? "ring", (mapData.road_theme ?? "elvish") as RoadTheme, externalConnections));
     setStatus("Regenerated road layout.");
   };
 
   const handleSizeChange = (size: CitySize) => {
     if (!mapData) return;
-    setMapData({
-      ...mapData,
-      size_label: size,
-    });
+    setMapData(generateCityMap(city, size, mapData.scale ?? 1, Date.now(), mapData.road_architecture ?? "ring", (mapData.road_theme ?? "elvish") as RoadTheme, externalConnections));
   };
 
   const handleScaleChange = (scale: number) => {
     if (!mapData) return;
-    setMapData(generateCityMap(city, mapData.size_label, scale, mapData.seed));
+    setMapData(generateCityMap(city, mapData.size_label, scale, mapData.seed, mapData.road_architecture ?? "ring", (mapData.road_theme ?? "elvish") as RoadTheme, externalConnections));
+  };
+
+  const regenerateLayout = (architecture: RoadArchitecture, theme: RoadTheme) => {
+    if (!mapData) return;
+    setMapData(generateCityMap(city, mapData.size_label, mapData.scale ?? 1, Date.now(), architecture, theme, externalConnections));
+  };
+
+  const saveResidentTag = () => {
+    if (!mapData || !selectedResidenceId) return;
+    setMapData({ ...mapData, buildings: mapData.buildings.map((building) => building.id === selectedResidenceId ? { ...building, role: residentTag.trim() || undefined } : building) });
+    setSelectedResidenceId(null);
+    setResidentTag("");
   };
 
   const updateRoadPoint = (roadId: string, pointId: string, patch: Partial<CityRoadPoint>) => {
@@ -289,33 +327,45 @@ export function CityMapEditor({ city, onClose }: Props) {
                           ? "#facc15"
                           : "#94a3b8"
                       }
-                      strokeWidth={road.importance === "main" ? 0.01 : 0.005}
+                      strokeWidth={0.0025 + (road.tier ?? 1) * 0.0025}
                       strokeLinecap="round"
                       strokeLinejoin="round"
                     />
                   ))}
                   {mapData.buildings.map((building) => (
                     <g key={building.id}>
-                      <circle
-                        cx={building.x}
-                        cy={building.y}
-                        r={0.01}
+                      <rect
+                        x={building.x - (building.width ?? building.footprint) / 2}
+                        y={building.y - (building.height ?? building.footprint * 1.4) / 2}
+                        width={building.width ?? building.footprint}
+                        height={building.height ?? building.footprint * 1.4}
+                        transform={`rotate(${((building.rotation ?? 0) * 180) / Math.PI} ${building.x} ${building.y})`}
+                        rx={building.kind === "private" ? 0.001 : 0.004}
                         fill={
                           building.kind === "public"
                             ? "#38bdf8"
                             : building.kind === "market"
                             ? "#fcd34d"
-                            : "#ef4444"
+                          : "#ef4444"
                         }
+                        opacity={building.kind === "private" ? 0.72 : 1}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (building.kind === "private") {
+                            setSelectedResidenceId(building.id);
+                            setResidentTag(building.role ?? "");
+                          }
+                        }}
                       />
-                      <text
+                      {building.role && <text
                         x={building.x + 0.01}
                         y={building.y - 0.01}
                         fontSize="0.018"
                         fill="#e2e8f0"
                       >
-                        {building.name}
+                        {building.role}
                       </text>
+                      }
                     </g>
                   ))}
                 </svg>
@@ -365,6 +415,18 @@ export function CityMapEditor({ city, onClose }: Props) {
                 <input type="range" min={0.6} max={2} step={0.1} value={mapData?.scale ?? 1} onChange={(e) => handleScaleChange(Number(e.target.value))} />
                 <span>{(mapData?.scale ?? 1).toFixed(1)}x</span>
               </label>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <label className="space-y-1 text-slate-400">Street plan
+                  <select className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-2" value={mapData?.road_architecture ?? "ring"} onChange={(e) => regenerateLayout(e.target.value as RoadArchitecture, (mapData?.road_theme ?? "fantasy") as RoadTheme)}>
+                    <option value="ring">Ring & radial</option><option value="grid">Grid / orthogonal</option><option value="star">Star / civic core</option><option value="organic">Organic / historic</option>
+                  </select>
+                </label>
+                <label className="space-y-1 text-slate-400">Road names
+                  <select className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-2" value={mapData?.road_theme ?? "elvish"} onChange={(e) => regenerateLayout((mapData?.road_architecture ?? "ring") as RoadArchitecture, e.target.value as RoadTheme)}>
+                    {ROAD_THEMES.map((theme) => <option key={theme.key} value={theme.key}>{theme.category}: {theme.label}</option>)}
+                  </select>
+                </label>
+              </div>
             </section>
 
             <section className="space-y-2">
@@ -433,6 +495,7 @@ export function CityMapEditor({ city, onClose }: Props) {
                   </li>
                 ))}
               </ul>
+              {selectedResidenceId && <div className="flex gap-2 rounded border border-slate-700 p-2 text-xs"><input className="flex-1 rounded bg-slate-950 px-2 py-1" placeholder="NPC or household tag" value={residentTag} onChange={(e) => setResidentTag(e.target.value)} /><button onClick={saveResidentTag} className="rounded bg-sky-600 px-2">Save tag</button></div>}
             </section>
 
             <section className="space-y-2">
