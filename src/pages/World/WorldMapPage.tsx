@@ -68,6 +68,7 @@ function loadIcon(url: string): Promise<HTMLImageElement> {
       url,
       new Promise((resolve) => {
         const img = new Image();
+        img.decoding = "async";
         img.onload = () => resolve(img);
         img.onerror = () => resolve(img);
         img.src = url;
@@ -856,10 +857,10 @@ function buildRoadBetweenAnchors(
 ) {
   const width = map.width;
   const height = map.height;
-  const startX = clamp(from.x, 0, 0.9999) * (width - 1);
-  const startY = clamp(from.y, 0, 0.9999) * (height - 1);
-  const endX = clamp(to.x, 0, 0.9999) * (width - 1);
-  const endY = clamp(to.y, 0, 0.9999) * (height - 1);
+  const startX = clamp(from.x, 0, 0.9999) * width - 0.5;
+  const startY = clamp(from.y, 0, 0.9999) * height - 0.5;
+  const endX = clamp(to.x, 0, 0.9999) * width - 0.5;
+  const endY = clamp(to.y, 0, 0.9999) * height - 0.5;
 
   const start = { x: Math.round(startX), y: Math.round(startY) };
   const goal = { x: Math.round(endX), y: Math.round(endY) };
@@ -867,7 +868,6 @@ function buildRoadBetweenAnchors(
   const maxBridgeCells = 2;
 
   const gScore = new Map<string, number>();
-  const fScore = new Map<string, number>();
   const cameFrom = new Map<string, { x: number; y: number }>();
   const waterRun = new Map<string, number>();
 
@@ -878,17 +878,16 @@ function buildRoadBetweenAnchors(
 
   const open: Array<{ x: number; y: number }> = [start];
   gScore.set(key(start.x, start.y), 0);
-  fScore.set(key(start.x, start.y), heuristic(start.x, start.y));
   waterRun.set(key(start.x, start.y), isWaterCell(map, start.x, start.y) ? 1 : 0);
 
   while (open.length > 0) {
-    // Find node with lowest fScore.
+    // Keep roads broadly direct; terrain bends them only where the grade demands it.
     let currentIndex = 0;
     let currentBest = open[0];
-    let currentBestF = fScore.get(key(currentBest.x, currentBest.y)) ?? Infinity;
+    let currentBestF = (gScore.get(key(currentBest.x, currentBest.y)) ?? Infinity) + heuristic(currentBest.x, currentBest.y) * 1.35;
     for (let i = 1; i < open.length; i += 1) {
       const node = open[i];
-      const score = fScore.get(key(node.x, node.y)) ?? Infinity;
+      const score = (gScore.get(key(node.x, node.y)) ?? Infinity) + heuristic(node.x, node.y) * 1.35;
       if (score < currentBestF) {
         currentBest = node;
         currentBestF = score;
@@ -916,8 +915,6 @@ function buildRoadBetweenAnchors(
     }
 
     const currentRelief = reliefAt(currentBest.x, currentBest.y);
-    const prev = cameFrom.get(currentKey);
-    const prevRelief = prev ? reliefAt(prev.x, prev.y) : currentRelief;
     const currentWaterRun = waterRun.get(currentKey) ?? 0;
 
     for (let dy = -1; dy <= 1; dy += 1) {
@@ -931,25 +928,21 @@ function buildRoadBetweenAnchors(
         const stepBase = diagonal ? Math.SQRT2 : 1;
         const nextRelief = reliefAt(nx, ny);
         const slopeDiff = Math.abs(nextRelief - currentRelief);
-        const continuous =
-          Math.sign(nextRelief - currentRelief) === Math.sign(currentRelief - prevRelief) &&
-          Math.abs(nextRelief - currentRelief) > 0.01;
         const vegetation = vegetationAt(nx, ny);
 
         const nextIsWater = isWaterCell(map, nx, ny);
         const nextWaterRun = nextIsWater ? currentWaterRun + 1 : 0;
         if (nextIsWater && nextWaterRun > maxBridgeCells) continue;
 
-        const slopePenalty = slopeDiff * 18;
-        const continuousPenalty = continuous ? Math.abs(nextRelief - currentRelief) * 30 : 0;
-        const vegetationPenalty = vegetation * 6;
+        // Grade is direction-neutral: ascents and descents both avoid steep cells.
+        const slopePenalty = slopeDiff * slopeDiff * 165 + Math.max(0, slopeDiff - 0.035) * 24;
+        const vegetationPenalty = vegetation * 1.25;
         const waterPenalty = nextIsWater ? 80 * nextWaterRun : 0;
 
         const tentativeG =
           (gScore.get(currentKey) ?? Infinity) +
           stepBase +
           slopePenalty +
-          continuousPenalty +
           vegetationPenalty +
           waterPenalty;
 
@@ -957,7 +950,6 @@ function buildRoadBetweenAnchors(
         if (tentativeG < (gScore.get(neighborKey) ?? Infinity)) {
           cameFrom.set(neighborKey, { x: currentBest.x, y: currentBest.y });
           gScore.set(neighborKey, tentativeG);
-          fScore.set(neighborKey, tentativeG + heuristic(nx, ny) * 1.1);
           waterRun.set(neighborKey, nextWaterRun);
           if (!open.find((node) => node.x === nx && node.y === ny)) {
             open.push({ x: nx, y: ny });
@@ -1035,15 +1027,31 @@ function addCityToMap(
 ): { map: MapStateExtended; city: MapCity } {
   const width = map.width;
   const height = map.height;
-  const gridX = clamp(xRatio, 0, 0.9999) * (width - 1);
-  const gridY = clamp(yRatio, 0, 0.9999) * (height - 1);
-  const idx = Math.round(gridY) * width + Math.round(gridX);
+  const clickedX = Math.round(clamp(xRatio, 0, 0.9999) * width - 0.5);
+  const clickedY = Math.round(clamp(yRatio, 0, 0.9999) * height - 0.5);
+  let gridX = clickedX;
+  let gridY = clickedY;
+  // Snap a water click to the nearest usable land tile instead of creating an
+  // unreachable city marker offshore.
+  for (let radius = 0; radius <= 8 && isWaterCell(map, gridX, gridY); radius += 1) {
+    let candidate: { x: number; y: number } | null = null;
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        const x = clickedX + dx;
+        const y = clickedY + dy;
+        if (x < 0 || y < 0 || x >= width || y >= height || isWaterCell(map, x, y)) continue;
+        if (!candidate || Math.abs(dx) + Math.abs(dy) < Math.abs(candidate.x - clickedX) + Math.abs(candidate.y - clickedY)) candidate = { x, y };
+      }
+    }
+    if (candidate) { gridX = candidate.x; gridY = candidate.y; }
+  }
+  const idx = gridY * width + gridX;
   const elevation = map.relief[idx];
   const city: MapCity = {
     id: randomId(),
     name,
-    x: (Math.round(gridX) + 0.5) / width,
-    y: (Math.round(gridY) + 0.5) / height,
+    x: (gridX + 0.5) / width,
+    y: (gridY + 0.5) / height,
     elevation,
     population: Math.floor(500 + Math.random() * 4500),
   };
@@ -1052,13 +1060,13 @@ function addCityToMap(
     points: road.points.map((point) => ({ ...point })),
   }));
   const target = findAttachmentTarget(map, city);
-  if (target) {
+  if (target && distance(target, city) <= 0.28) {
     const path = buildRoadBetweenAnchors(map, target, { x: city.x, y: city.y });
     roads = [
       ...roads,
       {
         id: randomId(),
-        from_city_id: target.targetId ?? city.id,
+        from_city_id: target.targetType === "city" ? target.targetId ?? "" : "",
         to_city_id: city.id,
         points: path,
       },
@@ -1424,11 +1432,11 @@ export function WorldMapPage() {
       const localY = event.clientY - rect.top;
       if (viewMode === "grid") {
         const cellSize = TILE_BASE * zoom;
-        const gridX = (localX - panOffset.x) / (cellSize * mapState.width);
-        const gridY = (localY - panOffset.y) / (cellSize * mapState.height);
+        const gridX = (localX - panOffset.x) / cellSize;
+        const gridY = (localY - panOffset.y) / cellSize;
         return {
-          x: clamp(gridX, 0, 0.9999),
-          y: clamp(gridY, 0, 0.9999),
+          x: clamp((gridX + 0.5) / mapState.width, 0.5 / mapState.width, 1 - 0.5 / mapState.width),
+          y: clamp((gridY + 0.5) / mapState.height, 0.5 / mapState.height, 1 - 0.5 / mapState.height),
         };
       }
       const tileWidth = TILE_BASE * zoom;
@@ -1441,8 +1449,8 @@ export function WorldMapPage() {
       const gridX = sumCenter / 2 + dx / tileWidth - dy / tileHeight;
       const gridY = sumCenter / 2 + dx / tileWidth + dy / tileHeight;
       return {
-        x: clamp(gridX / mapState.width, 0, 0.9999),
-        y: clamp(gridY / mapState.height, 0, 0.9999),
+        x: clamp((gridX + 0.5) / mapState.width, 0.5 / mapState.width, 1 - 0.5 / mapState.width),
+        y: clamp((gridY + 0.5) / mapState.height, 0.5 / mapState.height, 1 - 0.5 / mapState.height),
       };
     },
     [mapState, viewMode, zoom, panOffset, viewportSize]
