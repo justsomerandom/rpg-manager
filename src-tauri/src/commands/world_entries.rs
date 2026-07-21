@@ -45,7 +45,10 @@ pub fn list_world_entries(
     world_id: String,
     category: Option<String>,
 ) -> Result<Vec<WorldEntry>, String> {
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     let mut entries = Vec::new();
 
     if let Some(cat) = category {
@@ -107,7 +110,10 @@ pub fn create_world_entry(
     let created_at = Utc::now().timestamp();
     let metadata = metadata_json.unwrap_or_else(|| "{}".into());
 
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     conn.execute(
         "INSERT INTO world_entries
          (id, world_id, category, title, summary, body, metadata_json, created_at)
@@ -151,7 +157,10 @@ pub fn update_world_entry(
     }
 
     let metadata = metadata_json.unwrap_or_else(|| "{}".into());
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     conn.execute(
         "UPDATE world_entries
          SET title = ?1,
@@ -169,7 +178,10 @@ pub fn update_world_entry(
 
 #[tauri::command]
 pub fn delete_world_entry(state: State<AppState>, id: String) -> Result<(), String> {
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     conn.execute("DELETE FROM world_entries WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
     Ok(())

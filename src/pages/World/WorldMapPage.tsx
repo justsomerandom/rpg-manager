@@ -1,491 +1,459 @@
-﻿
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, WheelEvent } from "react";
 import { useParams } from "react-router-dom";
 import {
   getWorldMap,
   saveWorldMap,
   type MapCity,
-  type MapState,
 } from "../../api/worldMap";
 import { CityMapEditor } from "../../components/CityMapEditor";
-
-const MAP_DEFAULT_SIZE = 96;
-const DEFAULT_WATER_LEVEL = 0.42;
-const MAP_SIZE_CHOICES = [64, 96, 128, 160];
-const TILE_BASE = 28;
-const MIN_ZOOM = 0.35;
-const MAX_ZOOM = 2.75;
-const SNAP_THRESHOLD = 0.03;
-const RELIEF_INTENSITY = 0.035;
-const CLIMATE_INTENSITY = 0.025;
-
-type Biome =
-  | "ocean"
-  | "shallow"
-  | "reef"
-  | "beach"
-  | "mangrove"
-  | "wetland"
-  | "plains"
-  | "meadow"
-  | "forest"
-  | "rainforest"
-  | "boreal_forest"
-  | "hilly_forest"
-  | "jungle"
-  | "swamp"
-  | "fen"
-  | "savanna"
-  | "steppe"
-  | "badlands"
-  | "desert"
-  | "crystal_desert"
-  | "salt_flat"
-  | "tundra"
-  | "icy_plains"
-  | "glacier"
-  | "mountain"
-  | "highland"
-  | "hills"
-  | "basalt_fields"
-  | "lava_lake"
-  | "obsidian_ridge"
-  | "hot_springs"
-  | "volcanic_forest"
-  | "snow";
-
-type ViewMode = "iso" | "grid";
-type ToolGroup = "general" | "biome" | "relief" | "locations";
-type BiomeToolMode = "palette" | "moisture" | "temperature" | "vegetation";
-type ClimateTarget = "moisture" | "temperature" | "vegetation";
-type PrimaryAction =
-  | "navigate"
-  | "paint-biome"
-  | "raise-relief"
-  | "lower-relief"
-  | "raise-moisture"
-  | "lower-moisture"
-  | "raise-temperature"
-  | "lower-temperature"
-  | "raise-vegetation"
-  | "lower-vegetation"
-  | "place-city"
-  | "add-road";
-
-type BrushAction =
-  | "paint-biome"
-  | "raise-relief"
-  | "lower-relief"
-  | "raise-moisture"
-  | "lower-moisture"
-  | "raise-temperature"
-  | "lower-temperature"
-  | "raise-vegetation"
-  | "lower-vegetation";
-
-type PixelPoint = { x: number; y: number };
-type PanVector = { x: number; y: number };
-type NetworkAnchor = PixelPoint & {
-  label: string;
-  targetType: "city" | "road" | "free";
-  targetId?: string;
-};
-
-type MapStateExtended = MapState & {
-  temperature: number[];
-  vegetation: number[];
-};
-
-type OverlayMode = "biomes" | "relief" | "temperature" | "vegetation";
-
-const BRUSH_ACTIONS: ReadonlySet<PrimaryAction> = new Set<PrimaryAction>([
-  "paint-biome",
-  "raise-relief",
-  "lower-relief",
-  "raise-moisture",
-  "lower-moisture",
-  "raise-temperature",
-  "lower-temperature",
-  "raise-vegetation",
-  "lower-vegetation",
-]);
-
-const TOOL_GROUP_LABELS: Record<ToolGroup, string> = {
-  general: "General",
-  biome: "Biome",
-  relief: "Relief",
-  locations: "Locations",
-};
-
-const PRIMARY_ACTION_LABEL: Record<PrimaryAction, string> = {
-  navigate: "Navigate / select",
-  "paint-biome": "Paint biome",
-  "raise-relief": "Raise relief",
-  "lower-relief": "Lower relief",
-  "raise-moisture": "Raise humidity",
-  "lower-moisture": "Lower humidity",
-  "raise-temperature": "Raise temperature",
-  "lower-temperature": "Lower temperature",
-  "raise-vegetation": "Raise vegetation",
-  "lower-vegetation": "Lower vegetation",
-  "place-city": "Add city",
-  "add-road": "Add road",
-};
-
-const ACTION_CURSOR: Record<PrimaryAction, string> = {
-  navigate: "grab",
-  "paint-biome": "crosshair",
-  "raise-relief": "crosshair",
-  "lower-relief": "crosshair",
-  "raise-moisture": "crosshair",
-  "lower-moisture": "crosshair",
-  "raise-temperature": "crosshair",
-  "lower-temperature": "crosshair",
-  "raise-vegetation": "crosshair",
-  "lower-vegetation": "crosshair",
-  "place-city": "copy",
-  "add-road": "cell",
-};
-
-const CLIMATE_LAYERS: Array<{
-  key: ClimateTarget;
-  label: string;
-  minLabel: string;
-  maxLabel: string;
-}> = [
-  { key: "moisture", label: "Humidity", minLabel: "Arid", maxLabel: "Wet" },
-  { key: "temperature", label: "Temperature", minLabel: "Cold", maxLabel: "Hot" },
-  { key: "vegetation", label: "Vegetation", minLabel: "Barren", maxLabel: "Lush" },
-];
-const BIOME_COLORS: Record<Biome, [number, number, number]> = {
-  ocean: [6, 32, 52],
-  shallow: [25, 65, 93],
-  reef: [41, 99, 126],
-  beach: [205, 186, 143],
-  mangrove: [39, 91, 80],
-  wetland: [48, 96, 71],
-  plains: [83, 130, 76],
-  meadow: [114, 150, 88],
-  forest: [44, 95, 66],
-  rainforest: [27, 84, 53],
-  boreal_forest: [35, 80, 72],
-  hilly_forest: [57, 112, 85],
-  jungle: [22, 70, 50],
-  swamp: [58, 96, 65],
-  fen: [77, 111, 83],
-  savanna: [160, 133, 73],
-  steppe: [133, 125, 96],
-  badlands: [146, 102, 66],
-  desert: [213, 174, 98],
-  crystal_desert: [228, 198, 171],
-  salt_flat: [200, 205, 203],
-  tundra: [156, 161, 178],
-  icy_plains: [192, 216, 231],
-  glacier: [221, 234, 241],
-  mountain: [121, 112, 120],
-  highland: [107, 126, 112],
-  hills: [132, 147, 118],
-  basalt_fields: [74, 65, 66],
-  lava_lake: [203, 74, 44],
-  obsidian_ridge: [44, 38, 46],
-  hot_springs: [116, 185, 188],
-  volcanic_forest: [72, 102, 71],
-  snow: [238, 242, 247],
-};
-
-const BIOME_TARGETS: Record<
+import {
+  settlementIcons,
+  terrainIcons,
+  vegetationIcons,
+} from "../../assets/map-icons";
+import {
+  ACTION_CURSOR,
+  BIOME_COLORS,
+  BIOME_GROUPS,
+  BIOME_TARGETS,
+  BRUSH_ACTIONS,
+  CLIMATE_INTENSITY,
+  CLIMATE_LAYERS,
+  DEFAULT_WATER_LEVEL,
+  MAP_DEFAULT_SIZE,
+  MAP_SIZE_CHOICES,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  PRIMARY_ACTION_LABEL,
+  RELIEF_INTENSITY,
+  SNAP_THRESHOLD,
+  TILE_BASE,
+  TOOL_GROUP_LABELS,
+} from "./map/constants";
+import {
   Biome,
-  { relief: number; moisture: number; temperature: number; vegetation: number }
-> = {
-  ocean: { relief: 0.05, moisture: 0.95, temperature: 0.45, vegetation: 0.2 },
-  shallow: { relief: 0.15, moisture: 0.85, temperature: 0.5, vegetation: 0.35 },
-  reef: { relief: 0.18, moisture: 0.8, temperature: 0.55, vegetation: 0.4 },
-  beach: { relief: 0.22, moisture: 0.55, temperature: 0.65, vegetation: 0.25 },
-  mangrove: { relief: 0.27, moisture: 0.95, temperature: 0.7, vegetation: 0.85 },
-  wetland: { relief: 0.3, moisture: 0.88, temperature: 0.55, vegetation: 0.8 },
-  plains: { relief: 0.45, moisture: 0.55, temperature: 0.6, vegetation: 0.55 },
-  meadow: { relief: 0.42, moisture: 0.58, temperature: 0.55, vegetation: 0.6 },
-  forest: { relief: 0.5, moisture: 0.65, temperature: 0.55, vegetation: 0.75 },
-  rainforest: { relief: 0.55, moisture: 0.9, temperature: 0.8, vegetation: 0.9 },
-  boreal_forest: { relief: 0.58, moisture: 0.55, temperature: 0.35, vegetation: 0.75 },
-  hilly_forest: { relief: 0.65, moisture: 0.6, temperature: 0.55, vegetation: 0.7 },
-  jungle: { relief: 0.5, moisture: 0.85, temperature: 0.78, vegetation: 0.86 },
-  swamp: { relief: 0.35, moisture: 0.9, temperature: 0.6, vegetation: 0.8 },
-  fen: { relief: 0.38, moisture: 0.82, temperature: 0.45, vegetation: 0.72 },
-  savanna: { relief: 0.48, moisture: 0.45, temperature: 0.7, vegetation: 0.4 },
-  steppe: { relief: 0.43, moisture: 0.35, temperature: 0.5, vegetation: 0.32 },
-  badlands: { relief: 0.6, moisture: 0.25, temperature: 0.7, vegetation: 0.18 },
-  desert: { relief: 0.52, moisture: 0.1, temperature: 0.82, vegetation: 0.1 },
-  crystal_desert: { relief: 0.57, moisture: 0.12, temperature: 0.7, vegetation: 0.08 },
-  salt_flat: { relief: 0.4, moisture: 0.1, temperature: 0.65, vegetation: 0.05 },
-  tundra: { relief: 0.6, moisture: 0.28, temperature: 0.2, vegetation: 0.2 },
-  icy_plains: { relief: 0.42, moisture: 0.35, temperature: 0.17, vegetation: 0.18 },
-  glacier: { relief: 0.65, moisture: 0.3, temperature: 0.1, vegetation: 0.1 },
-  mountain: { relief: 0.88, moisture: 0.35, temperature: 0.35, vegetation: 0.25 },
-  highland: { relief: 0.75, moisture: 0.45, temperature: 0.45, vegetation: 0.4 },
-  hills: { relief: 0.65, moisture: 0.5, temperature: 0.5, vegetation: 0.5 },
-  basalt_fields: { relief: 0.78, moisture: 0.22, temperature: 0.85, vegetation: 0.15 },
-  lava_lake: { relief: 0.82, moisture: 0.2, temperature: 0.95, vegetation: 0.05 },
-  obsidian_ridge: { relief: 0.92, moisture: 0.18, temperature: 0.8, vegetation: 0.05 },
-  hot_springs: { relief: 0.72, moisture: 0.6, temperature: 0.7, vegetation: 0.45 },
-  volcanic_forest: { relief: 0.68, moisture: 0.65, temperature: 0.7, vegetation: 0.65 },
-  snow: { relief: 0.92, moisture: 0.4, temperature: 0.15, vegetation: 0.15 },
-};
+  BiomeToolMode,
+  ClimateTarget,
+  CompiledRenders,
+  MapStateExtended,
+  NetworkAnchor,
+  OverlayMode,
+  PanVector,
+  PixelPoint,
+  PrimaryAction,
+  ToolGroup,
+  ViewMode,
+} from "./map/types";
+import { clamp, lerp, pseudoRandom, randomId } from "./map/math";
+import {
+  buildBiomeGrid,
+  buildSmoothPath,
+  computeBiome,
+  extractBiomeLoops,
+  stylizeColor,
+} from "./map/biome";
+import {
+  ensureExtendedMap,
+  generateProceduralMap,
+  normalizeLayer,
+  smoothLayer,
+} from "./map/generation";
 
-const BIOME_GROUPS: Array<{ label: string; description: string; biomes: Biome[] }> = [
-  {
-    label: "Oceanic",
-    description: "Seas, coasts, and river mouths",
-    biomes: ["ocean", "shallow", "reef", "beach", "mangrove", "wetland"],
-  },
-  {
-    label: "Temperate",
-    description: "Mild climates, mixed woodlands",
-    biomes: ["plains", "meadow", "forest", "hilly_forest", "savanna", "fen"],
-  },
-  {
-    label: "Tropical",
-    description: "Warm lush regions",
-    biomes: ["jungle", "rainforest", "swamp", "volcanic_forest"],
-  },
-  {
-    label: "Arid",
-    description: "Dry windswept lands",
-    biomes: ["steppe", "badlands", "desert", "crystal_desert", "salt_flat"],
-  },
-  {
-    label: "Polar",
-    description: "Frozen tundra and snow fields",
-    biomes: ["tundra", "icy_plains", "glacier", "snow"],
-  },
-  {
-    label: "Highlands",
-    description: "Elevated ridges and slopes",
-    biomes: ["highland", "hills", "mountain", "boreal_forest"],
-  },
-  {
-    label: "Volcanic",
-    description: "Heat, magma, and thermal pools",
-    biomes: ["basalt_fields", "lava_lake", "obsidian_ridge", "hot_springs"],
-  },
-];
+const iconCache = new Map<string, Promise<HTMLImageElement>>();
 
-function clamp(value: number, min = 0, max = 1) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t;
-}
-
-function randomId() {
-  return Math.random().toString(36).slice(2, 10);
-}
-
-function pseudoRandom(x: number, y: number, seed: number) {
-  const s = Math.sin(x * 127.1 + y * 311.7 + seed * 0.001) * 43758.5453;
-  return s - Math.floor(s);
-}
-
-function noise2D(x: number, y: number, seed: number) {
-  const xi = Math.floor(x);
-  const yi = Math.floor(y);
-  const xf = x - xi;
-  const yf = y - yi;
-  const topRight = pseudoRandom(xi + 1, yi + 1, seed);
-  const topLeft = pseudoRandom(xi, yi + 1, seed);
-  const bottomRight = pseudoRandom(xi + 1, yi, seed);
-  const bottomLeft = pseudoRandom(xi, yi, seed);
-  const u = xf * xf * (3 - 2 * xf);
-  const v = yf * yf * (3 - 2 * yf);
-  const top = topLeft + u * (topRight - topLeft);
-  const bottom = bottomLeft + u * (bottomRight - bottomLeft);
-  return bottom + v * (top - bottom);
-}
-
-function fbm(x: number, y: number, seed: number) {
-  let value = 0;
-  let amplitude = 0.5;
-  let frequency = 1;
-  for (let i = 0; i < 5; i += 1) {
-    value += amplitude * noise2D(x * frequency, y * frequency, seed + i * 79);
-    frequency *= 2;
-    amplitude *= 0.5;
+function loadIcon(url: string): Promise<HTMLImageElement> {
+  if (!iconCache.has(url)) {
+    iconCache.set(
+      url,
+      new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(img);
+        img.src = url;
+      })
+    );
   }
-  return value;
+  return iconCache.get(url)!;
 }
 
-function smoothLayer(values: number[], width: number, height: number, passes = 1) {
-  let current = [...values];
-  for (let pass = 0; pass < passes; pass += 1) {
-    const next = current.slice();
-    for (let y = 1; y < height - 1; y += 1) {
-      for (let x = 1; x < width - 1; x += 1) {
-        let total = 0;
-        for (let dy = -1; dy <= 1; dy += 1) {
-          for (let dx = -1; dx <= 1; dx += 1) {
-            total += current[(y + dy) * width + (x + dx)];
-          }
-        }
-        next[y * width + x] = total / 9;
+
+function drawCoastlineGlimmer(
+  map: MapStateExtended,
+  ctx: CanvasRenderingContext2D,
+  cellSize: number
+) {
+  const sea = map.water_level;
+  const threshold = 0.06;
+  ctx.save();
+  ctx.strokeStyle = "rgba(241, 221, 182, 0.22)";
+  ctx.lineWidth = Math.max(1, cellSize * 0.05);
+  for (let y = 0; y < map.height; y += 1) {
+    for (let x = 0; x < map.width; x += 1) {
+      const idx = y * map.width + x;
+      const elev = map.relief[idx];
+      if (Math.abs(elev - sea) > threshold) continue;
+      const jitterX = (pseudoRandom(x, y, map.seed + 2025) - 0.5) * cellSize * 0.5;
+      const jitterY = (pseudoRandom(x, y, map.seed + 6066) - 0.5) * cellSize * 0.5;
+      const px = x * cellSize + jitterX;
+      const py = y * cellSize + jitterY;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + cellSize * 0.35, py + cellSize * 0.15);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function applyNoiseOverlay(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  alpha = 0.1
+) {
+  const noiseCanvas = document.createElement("canvas");
+  noiseCanvas.width = 96;
+  noiseCanvas.height = 96;
+  const nctx = noiseCanvas.getContext("2d");
+  if (!nctx) return;
+  const image = nctx.createImageData(noiseCanvas.width, noiseCanvas.height);
+  for (let i = 0; i < image.data.length; i += 4) {
+    const v = Math.floor(Math.random() * 255);
+    image.data[i] = v;
+    image.data[i + 1] = v;
+    image.data[i + 2] = v;
+    image.data[i + 3] = 255;
+  }
+  nctx.putImageData(image, 0, 0);
+  const pattern = ctx.createPattern(noiseCanvas, "repeat");
+  if (!pattern) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = pattern;
+  ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+}
+
+function applyFantasyOverlay(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, "rgba(255, 240, 210, 0.15)");
+  gradient.addColorStop(1, "rgba(12, 18, 16, 0.35)");
+  ctx.save();
+  ctx.globalCompositeOperation = "soft-light";
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+
+  const vignette = ctx.createRadialGradient(
+    width / 2,
+    height / 2,
+    Math.min(width, height) / 3,
+    width / 2,
+    height / 2,
+    Math.max(width, height) / 1.05
+  );
+  vignette.addColorStop(0, "rgba(0,0,0,0)");
+  vignette.addColorStop(1, "rgba(0,0,0,0.3)");
+  ctx.save();
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+}
+
+function cityTier(population: number): keyof typeof settlementIcons {
+  if (population > 600000) return "megapolis";
+  if (population > 180000) return "city";
+  if (population > 60000) return "town";
+  if (population > 12000) return "village";
+  return "hamlet";
+}
+
+function terrainIconForBiome(biome: Biome): string | null {
+  switch (biome) {
+    case "mountain":
+    case "snow":
+      return terrainIcons.mountain;
+    case "highland":
+      return terrainIcons.range;
+    case "hills":
+      return terrainIcons.hills;
+    case "basalt_fields":
+      return terrainIcons.badlands_spire;
+    case "lava_lake":
+    case "obsidian_ridge":
+    case "volcanic_forest":
+      return terrainIcons.volcano;
+    case "glacier":
+    case "icy_plains":
+      return terrainIcons.glacier;
+    case "hot_springs":
+      return terrainIcons.hot_spring;
+    case "crystal_desert":
+      return terrainIcons.crystal_peak;
+    case "desert":
+    case "salt_flat":
+      return terrainIcons.dunes;
+    default:
+      return null;
+  }
+}
+
+async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
+  const cellSize = Math.max(8, Math.floor(920 / Math.max(map.width, map.height)));
+  const logicalWidth = Math.max(640, Math.floor(map.width * cellSize));
+  const logicalHeight = Math.max(640, Math.floor(map.height * cellSize));
+  const canvas = document.createElement("canvas");
+  const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.floor(logicalWidth * pixelRatio);
+  canvas.height = Math.floor(logicalHeight * pixelRatio);
+  canvas.style.width = `${logicalWidth}px`;
+  canvas.style.height = `${logicalHeight}px`;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+  ctx.scale(pixelRatio, pixelRatio);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  const width = logicalWidth;
+  const height = logicalHeight;
+
+  ctx.fillStyle = "#070807";
+  ctx.fillRect(0, 0, width, height);
+
+  const biomeGrid = buildBiomeGrid(map);
+  const uniqueBiomes = Array.from(new Set(biomeGrid));
+  const watery = new Set<Biome>(["ocean", "shallow", "reef", "beach", "wetland", "mangrove"]);
+  uniqueBiomes.forEach((biome, biomeIndex) => {
+    const loops = extractBiomeLoops(biomeGrid, map.width, map.height, biome);
+    const color = stylizeColor(BIOME_COLORS[biome]);
+    ctx.fillStyle = color;
+    loops.forEach((loop, loopIndex) => {
+      const jitterScale = watery.has(biome) ? 0.48 : 0.26;
+      const path = buildSmoothPath(loop, cellSize, jitterScale, map.seed + biomeIndex * 41 + loopIndex * 13);
+      ctx.fill(path);
+    });
+  });
+  drawCoastlineGlimmer(map, ctx, cellSize);
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(255,255,255,0.04)";
+  ctx.beginPath();
+  for (let gx = 0; gx <= map.width; gx += 1) {
+    const px = gx * cellSize;
+    ctx.moveTo(px, 0);
+    ctx.lineTo(px, height);
+  }
+  for (let gy = 0; gy <= map.height; gy += 1) {
+    const py = gy * cellSize;
+    ctx.moveTo(0, py);
+    ctx.lineTo(width, py);
+  }
+  ctx.stroke();
+
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(224,196,128,0.9)";
+  map.roads.forEach((road) => {
+    if (!road.points.length) return;
+    ctx.beginPath();
+    road.points.forEach((point, index) => {
+      const px = point.x * map.width * cellSize;
+      const py = point.y * map.height * cellSize;
+      if (index === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+  });
+
+  const iconPromises: Promise<void>[] = [];
+  const baseStep = Math.max(3, Math.floor(Math.min(map.width, map.height) / 9));
+  for (let y = baseStep / 2; y < map.height; ) {
+    for (let x = baseStep / 2; x < map.width; ) {
+      const idx = Math.min(map.height - 1, Math.floor(y)) * map.width + Math.min(map.width - 1, Math.floor(x));
+      const biome = computeBiome(map, idx);
+      const vegLevel = map.vegetation[idx];
+      const densityFactor = lerp(0.45, 1.6, 1 - vegLevel);
+      const step = Math.max(2, Math.round(baseStep * densityFactor));
+      const vegUrl = vegetationIcons[biome];
+      const terrainUrl = terrainIconForBiome(biome);
+      const jitterX = (pseudoRandom(x, y, map.seed + 101) - 0.5) * cellSize * 0.6;
+      const jitterY = (pseudoRandom(x, y, map.seed + 303) - 0.5) * cellSize * 0.6;
+      const cx = x * cellSize + jitterX;
+      const cy = y * cellSize + jitterY;
+      const vegSize = Math.max(10, cellSize * 0.7);
+      if (vegUrl && pseudoRandom(x, y, map.seed + 1515) < vegLevel + 0.2) {
+        iconPromises.push(
+          loadIcon(vegUrl).then((img) => {
+            ctx.drawImage(img, cx - vegSize / 2, cy - vegSize / 2, vegSize, vegSize);
+          })
+        );
       }
+      if (terrainUrl && pseudoRandom(x, y, map.seed + 707) > 0.72) {
+        const size = Math.max(14, cellSize * 0.9);
+        iconPromises.push(
+          loadIcon(terrainUrl).then((img) => {
+            ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
+          })
+        );
+      }
+      x += step;
     }
-    current = next;
+    y += baseStep;
   }
-  return current;
+
+  map.cities.forEach((city) => {
+    const tier = cityTier(city.population);
+    const iconUrl = settlementIcons[tier];
+    const px = city.x * map.width * cellSize;
+    const py = city.y * map.height * cellSize;
+    const size = Math.max(18, cellSize * 1.1);
+    iconPromises.push(
+      loadIcon(iconUrl).then((img) => {
+        ctx.drawImage(img, px - size / 2, py - size / 2, size, size);
+      })
+    );
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.font = `${Math.max(11, cellSize * 0.4)}px 'Space Grotesk', sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText(city.name, px, py - size * 0.75);
+    ctx.restore();
+  });
+
+  await Promise.all(iconPromises);
+  applyFantasyOverlay(ctx, width, height);
+  applyNoiseOverlay(ctx, width, height, 0.08);
+  return canvas.toDataURL("image/png");
 }
-function generateTemperatureLayer(width: number, height: number, seed: number) {
-  const layer: number[] = new Array(width * height);
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const nx = x / width - 0.5;
-      const ny = y / height - 0.5;
-      const base = 0.6 - Math.abs(ny) * 0.7;
-      const noiseValue = fbm(nx * 3 + 50, ny * 3 - 50, seed + 517);
-      layer[y * width + x] = clamp(base + noiseValue * 0.35);
+
+async function drawCompiledIso(map: MapStateExtended): Promise<string> {
+  const tileWidth = Math.max(16, Math.floor(1400 / (map.width + map.height)));
+  const tileHeight = tileWidth / 2;
+  const logicalWidth = Math.max(960, Math.floor(tileWidth * (map.width + map.height)));
+  const logicalHeight = Math.max(720, Math.floor(tileHeight * (map.width + map.height)));
+  const canvas = document.createElement("canvas");
+  const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.floor(logicalWidth * pixelRatio);
+  canvas.height = Math.floor(logicalHeight * pixelRatio);
+  canvas.style.width = `${logicalWidth}px`;
+  canvas.style.height = `${logicalHeight}px`;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+  ctx.scale(pixelRatio, pixelRatio);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  const width = logicalWidth;
+  const height = logicalHeight;
+
+  ctx.fillStyle = "#0a0b0d";
+  ctx.fillRect(0, 0, width, height);
+
+  const originX = width / 2;
+  const originY = tileHeight * 2;
+  const sumCenter = (map.width - 1 + map.height - 1) / 2;
+
+  for (let y = 0; y < map.height; y += 1) {
+    for (let x = 0; x < map.width; x += 1) {
+      const idx = y * map.width + x;
+      const biome = computeBiome(map, idx);
+      const color = stylizeColor(BIOME_COLORS[biome]);
+      const isoX = (x + y - sumCenter) * (tileWidth / 2) + originX;
+      const isoY = (y - x) * (tileHeight / 2) + originY;
+      ctx.beginPath();
+      ctx.moveTo(isoX, isoY);
+      ctx.lineTo(isoX + tileWidth / 2, isoY + tileHeight / 2);
+      ctx.lineTo(isoX, isoY + tileHeight);
+      ctx.lineTo(isoX - tileWidth / 2, isoY + tileHeight / 2);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(8,25,19,0.28)";
+      ctx.stroke();
     }
   }
-  return smoothLayer(layer, width, height, 1);
-}
 
-function generateVegetationLayer(width: number, height: number, seed: number, moisture: number[]) {
-  const layer: number[] = new Array(width * height);
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const idx = y * width + x;
-      const nx = x / width - 0.5;
-      const ny = y / height - 0.5;
-      const noiseValue = fbm(nx * 4 - 80, ny * 4 + 120, seed + 733);
-      const base = moisture[idx] * 0.6 + (1 - Math.abs(ny)) * 0.2 + noiseValue * 0.2;
-      layer[idx] = clamp(base);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(224,196,128,0.85)";
+  map.roads.forEach((road) => {
+    if (!road.points.length) return;
+    ctx.beginPath();
+    road.points.forEach((point, index) => {
+      const px =
+        ((point.x * map.width + point.y * map.height - sumCenter) * (tileWidth / 2)) + originX;
+      const py =
+        (point.y * map.height - point.x * map.width) * (tileHeight / 2) + originY;
+      if (index === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+  });
+
+  const iconPromises: Promise<void>[] = [];
+  const vegetationStep = Math.max(3, Math.floor(Math.min(map.width, map.height) / 9));
+  for (let y = vegetationStep / 2; y < map.height; y += vegetationStep) {
+    for (let x = vegetationStep / 2; x < map.width; x += vegetationStep) {
+      const idx = Math.min(map.height - 1, Math.floor(y)) * map.width + Math.min(map.width - 1, Math.floor(x));
+      const biome = computeBiome(map, idx);
+      const vegLevel = map.vegetation[idx];
+      const vegUrl = vegetationIcons[biome];
+      const terrainUrl = terrainIconForBiome(biome);
+      const densityFactor = lerp(0.5, 1.6, 1 - vegLevel);
+      const jitterX = (pseudoRandom(x, y, map.seed + 404) - 0.5) * tileWidth * 0.5;
+      const jitterY = (pseudoRandom(x, y, map.seed + 505) - 0.5) * tileHeight * 0.8;
+      const gx = x + jitterX / tileWidth;
+      const gy = y + jitterY / tileHeight;
+      const isoX = (gx + gy - sumCenter) * (tileWidth / 2) + originX;
+      const isoY = (gy - gx) * (tileHeight / 2) + originY;
+      const vegSize = Math.max(12, tileWidth * 0.9);
+      if (vegUrl && pseudoRandom(x, y, map.seed + 1516) < vegLevel + 0.2) {
+        iconPromises.push(
+          loadIcon(vegUrl).then((img) => {
+            ctx.drawImage(img, isoX - vegSize / 2, isoY - vegSize / 2, vegSize, vegSize);
+          })
+        );
+      }
+      if (terrainUrl && pseudoRandom(x, y, map.seed + 909) > 0.72) {
+        const size = Math.max(16, tileWidth * 1.1);
+        iconPromises.push(
+          loadIcon(terrainUrl).then((img) => {
+            ctx.drawImage(img, isoX - size / 2, isoY - size / 2, size, size);
+          })
+        );
+      }
+      x += Math.max(2, Math.round(vegetationStep * densityFactor)) - vegetationStep;
     }
   }
-  return smoothLayer(layer, width, height, 1);
+
+  map.cities.forEach((city) => {
+    const tier = cityTier(city.population);
+    const iconUrl = settlementIcons[tier];
+    const px =
+      ((city.x * map.width + city.y * map.height - sumCenter) * (tileWidth / 2)) + originX;
+    const py =
+      (city.y * map.height - city.x * map.width) * (tileHeight / 2) + originY;
+    const size = Math.max(22, tileWidth * 1.35);
+    iconPromises.push(
+      loadIcon(iconUrl).then((img) => {
+        ctx.drawImage(img, px - size / 2, py - size / 2, size, size);
+      })
+    );
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.font = `${Math.max(12, tileWidth * 0.45)}px 'Space Grotesk', sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText(city.name, px, py - size * 0.85);
+    ctx.restore();
+  });
+
+  await Promise.all(iconPromises);
+  applyFantasyOverlay(ctx, width, height);
+  applyNoiseOverlay(ctx, width, height, 0.08);
+  return canvas.toDataURL("image/png");
 }
 
-function generateProceduralMap(
-  seed: number,
-  waterLevel = DEFAULT_WATER_LEVEL,
-  width = MAP_DEFAULT_SIZE,
-  height = MAP_DEFAULT_SIZE
-): MapStateExtended {
-  const relief: number[] = new Array(width * height);
-  const moisture: number[] = new Array(width * height);
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const nx = x / width - 0.5;
-      const ny = y / height - 0.5;
-      const distance = Math.sqrt(nx * nx + ny * ny);
-      const elevation = fbm(nx * 4, ny * 4, seed) - distance * 0.7;
-      const moistureValue = fbm(nx * 6 + 100, ny * 6 + 200, seed + 1337);
-      const idx = y * width + x;
-      relief[idx] = clamp(Math.pow(elevation + 0.5, 1.25));
-      moisture[idx] = clamp(moistureValue);
-    }
-  }
-  const temperature = generateTemperatureLayer(width, height, seed + 321);
-  const vegetation = generateVegetationLayer(width, height, seed + 555, moisture);
-  return {
-    width,
-    height,
-    relief: smoothLayer(relief, width, height, 2),
-    moisture,
-    water_level: waterLevel,
-    seed,
-    cities: [],
-    roads: [],
-    temperature,
-    vegetation,
-  };
-}
-
-function normalizeLayer(values: number[], width: number, height: number) {
-  const smoothed = smoothLayer(values, width, height, 1);
-  let min = Infinity;
-  let max = -Infinity;
-  for (const value of smoothed) {
-    if (value < min) min = value;
-    if (value > max) max = value;
-  }
-  const range = max - min || 1;
-  return smoothed.map((value) => (value - min) / range);
-}
-
-function ensureExtendedMap(map: MapState): MapStateExtended {
-  const width = map.width;
-  const height = map.height;
-  const total = width * height;
-  const extended = map as MapStateExtended;
-  const moisture =
-    map.moisture.length === total ? map.moisture : new Array(total).fill(0.5);
-  const temperature =
-    extended.temperature && extended.temperature.length === total
-      ? extended.temperature
-      : generateTemperatureLayer(width, height, map.seed + 777);
-  const vegetation =
-    extended.vegetation && extended.vegetation.length === total
-      ? extended.vegetation
-      : generateVegetationLayer(width, height, map.seed + 999, moisture);
-  return {
-    ...map,
-    moisture,
-    temperature,
-    vegetation,
-  };
-}
-function computeBiome(map: MapStateExtended, idx: number): Biome {
-  const relief = map.relief[idx];
-  const moisture = map.moisture[idx];
-  const temperature = map.temperature[idx];
-  const vegetation = map.vegetation[idx];
-  const seaLevel = map.water_level;
-
-  if (relief <= seaLevel * 0.8) return "ocean";
-  if (relief <= seaLevel * 0.9) {
-    if (moisture > 0.8) return "mangrove";
-    return moisture > 0.4 ? "shallow" : "reef";
-  }
-  if (relief <= seaLevel + 0.03) {
-    if (moisture > 0.75) return "wetland";
-    return temperature > 0.65 ? "beach" : "reef";
-  }
-  if (relief > 0.92) {
-    if (temperature > 0.75) return "obsidian_ridge";
-    return temperature < 0.2 ? "snow" : "mountain";
-  }
-  if (relief > 0.85 && temperature > 0.7) {
-    return vegetation < 0.25 ? "lava_lake" : "hot_springs";
-  }
-  if (relief > 0.75) {
-    if (temperature < 0.3) return "glacier";
-    return moisture > 0.55 ? "highland" : "hills";
-  }
-  if (temperature < 0.2) {
-    return vegetation > 0.35 ? "boreal_forest" : "tundra";
-  }
-  if (moisture > 0.9) {
-    return temperature > 0.65 ? "rainforest" : "swamp";
-  }
-  if (moisture > 0.75) {
-    return vegetation > 0.65 ? "forest" : "hilly_forest";
-  }
-  if (moisture > 0.6) {
-    return vegetation > 0.5 ? "meadow" : "plains";
-  }
-  if (moisture > 0.45) {
-    return temperature > 0.6 ? "savanna" : "plains";
-  }
-  if (moisture > 0.3) {
-    return temperature > 0.55 ? "steppe" : "icy_plains";
-  }
-  if (temperature > 0.75) {
-    return vegetation < 0.25 ? "crystal_desert" : "desert";
-  }
-  if (vegetation < 0.2) {
-    return relief > 0.55 ? "basalt_fields" : "salt_flat";
-  }
-  return "badlands";
+async function generateCompiledRenders(map: MapStateExtended): Promise<CompiledRenders> {
+  const extended = ensureExtendedMap(map);
+  const [grid, iso] = await Promise.all([drawCompiledGrid(extended), drawCompiledIso(extended)]);
+  return { grid, iso };
 }
 
 function drawIsometricMap(
@@ -845,94 +813,6 @@ function computeRange(values: number[]) {
   return { min, max };
 }
 
-function sampleRelief(map: MapStateExtended, point: PixelPoint) {
-  const width = map.width;
-  const height = map.height;
-  const x = clamp(point.x, 0, 0.9999) * (width - 1);
-  const y = clamp(point.y, 0, 0.9999) * (height - 1);
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const x1 = Math.min(width - 1, x0 + 1);
-  const y1 = Math.min(height - 1, y0 + 1);
-  const sx = x - x0;
-  const sy = y - y0;
-  const v00 = map.relief[y0 * width + x0];
-  const v10 = map.relief[y0 * width + x1];
-  const v01 = map.relief[y1 * width + x0];
-  const v11 = map.relief[y1 * width + x1];
-  const i1 = lerp(v00, v10, sx);
-  const i2 = lerp(v01, v11, sx);
-  return lerp(i1, i2, sy);
-}
-
-function sampleVegetation(map: MapStateExtended, point: PixelPoint) {
-  const width = map.width;
-  const height = map.height;
-  const x = clamp(point.x, 0, 0.9999) * (width - 1);
-  const y = clamp(point.y, 0, 0.9999) * (height - 1);
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const x1 = Math.min(width - 1, x0 + 1);
-  const y1 = Math.min(height - 1, y0 + 1);
-  const sx = x - x0;
-  const sy = y - y0;
-  const v00 = map.vegetation[y0 * width + x0] ?? 0;
-  const v10 = map.vegetation[y0 * width + x1] ?? 0;
-  const v01 = map.vegetation[y1 * width + x0] ?? 0;
-  const v11 = map.vegetation[y1 * width + x1] ?? 0;
-  const i1 = lerp(v00, v10, sx);
-  const i2 = lerp(v01, v11, sx);
-  return lerp(i1, i2, sy);
-}
-
-function sampleSlope(map: MapStateExtended, point: PixelPoint) {
-  const eps = 1 / Math.min(map.width, map.height);
-  const forward = sampleRelief(map, {
-    x: clamp(point.x + eps, 0, 0.9999),
-    y: point.y,
-  });
-  const backward = sampleRelief(map, {
-    x: clamp(point.x - eps, 0, 0.9999),
-    y: point.y,
-  });
-  const up = sampleRelief(map, {
-    x: point.x,
-    y: clamp(point.y - eps, 0, 0.9999),
-  });
-  const down = sampleRelief(map, {
-    x: point.x,
-    y: clamp(point.y + eps, 0, 0.9999),
-  });
-  return {
-    dx: forward - backward,
-    dy: down - up,
-  };
-}
-
-function sampleVegetationGradient(map: MapStateExtended, point: PixelPoint) {
-  const eps = 1 / Math.min(map.width, map.height);
-  const forward = sampleVegetation(map, {
-    x: clamp(point.x + eps, 0, 0.9999),
-    y: point.y,
-  });
-  const backward = sampleVegetation(map, {
-    x: clamp(point.x - eps, 0, 0.9999),
-    y: point.y,
-  });
-  const up = sampleVegetation(map, {
-    x: point.x,
-    y: clamp(point.y - eps, 0, 0.9999),
-  });
-  const down = sampleVegetation(map, {
-    x: point.x,
-    y: clamp(point.y + eps, 0, 0.9999),
-  });
-  return {
-    dx: forward - backward,
-    dy: down - up,
-  };
-}
-
 function isWaterCell(map: MapStateExtended, x: number, y: number) {
   const idx = y * map.width + x;
   return map.relief[idx] <= map.water_level;
@@ -946,7 +826,7 @@ function reliefOverlayColor(
   const seaLevel = map.water_level;
   const min = Math.min(range.min, seaLevel);
   const max = Math.max(range.max, seaLevel + 0.0001);
-  const t = clamp((reliefValue - seaLevel) / (max - seaLevel), 0, 1);
+  const t = clamp((reliefValue - min) / (max - min), 0, 1);
   const hue = lerp(220, 20, t); // deep blue to warm amber
   const light = lerp(25, 70, t);
   const sat = lerp(70, 90, t);
@@ -1130,12 +1010,29 @@ function findAttachmentTarget(map: MapStateExtended, city: MapCity): NetworkAnch
   return best;
 }
 
+function findNearestCity(
+  map: MapStateExtended,
+  point: PixelPoint,
+  threshold = 0.04
+): MapCity | null {
+  let best: MapCity | null = null;
+  let bestDist = threshold;
+  map.cities.forEach((city) => {
+    const d = distance(point, { x: city.x, y: city.y });
+    if (d < bestDist) {
+      bestDist = d;
+      best = city;
+    }
+  });
+  return best;
+}
+
 function addCityToMap(
   map: MapStateExtended,
   name: string,
   xRatio: number,
   yRatio: number
-): MapStateExtended {
+): { map: MapStateExtended; city: MapCity } {
   const width = map.width;
   const height = map.height;
   const gridX = clamp(xRatio, 0, 0.9999) * (width - 1);
@@ -1168,9 +1065,12 @@ function addCityToMap(
     ];
   }
   return {
-    ...map,
-    cities: [...map.cities, city],
-    roads,
+    map: {
+      ...map,
+      cities: [...map.cities, city],
+      roads,
+    },
+    city,
   };
 }
 
@@ -1260,13 +1160,15 @@ export function WorldMapPage() {
   const [locationAction, setLocationAction] = useState<PrimaryAction>("navigate");
   const [viewMode, setViewMode] = useState<ViewMode>("iso");
   const [draftCityName, setDraftCityName] = useState("New City");
+  const [compiledView, setCompiledView] = useState(true);
+  const compiledPreferenceRef = useRef(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportSize, setViewportSize] = useState({ width: 1200, height: 800 });
   const lastPanRef = useRef<{ x: number; y: number } | null>(null);
 
-  const primaryAction = useMemo<PrimaryAction>(() => {
+  const derivedPrimaryAction = useMemo<PrimaryAction>(() => {
     if (toolGroup === "biome") {
       if (biomeToolMode === "palette") return "paint-biome";
       const direction = climateDirection === "raise" ? "raise" : "lower";
@@ -1275,14 +1177,20 @@ export function WorldMapPage() {
     if (toolGroup === "relief") {
       return reliefAction === "raise" ? "raise-relief" : "lower-relief";
     }
-    if (toolGroup === "locations") {
-      return locationAction;
-    }
-    return "navigate";
-  }, [toolGroup, biomeToolMode, climateDirection, climateTarget, reliefAction, locationAction]);
+      if (toolGroup === "locations") {
+        return locationAction;
+      }
+      return "navigate";
+    }, [toolGroup, biomeToolMode, climateDirection, climateTarget, reliefAction, locationAction]);
 
-  const isBrushAction = BRUSH_ACTIONS.has(primaryAction);
-  const cursorStyle = isPanning ? "grabbing" : ACTION_CURSOR[primaryAction];
+  const primaryAction = compiledView ? "navigate" : derivedPrimaryAction;
+
+  const isBrushAction = !compiledView && BRUSH_ACTIONS.has(primaryAction);
+  const cursorStyle = compiledView
+    ? "default"
+    : isPanning
+    ? "grabbing"
+    : ACTION_CURSOR[primaryAction];
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -1296,6 +1204,32 @@ export function WorldMapPage() {
       setRoadDraftStart(null);
     }
   }, [toolGroup]);
+
+  useEffect(() => {
+    if (compiledView) {
+      setToolGroup("general");
+      setLocationAction("navigate");
+      setRoadDraftStart(null);
+      setIsBrushing(false);
+    }
+  }, [compiledView]);
+
+  useEffect(() => {
+    if (!mapState) {
+      setCompiledView(false);
+      compiledPreferenceRef.current = false;
+      return;
+    }
+    const available = !!(mapState.compiled_grid && mapState.compiled_iso);
+    if (!available) {
+      setCompiledView(false);
+      compiledPreferenceRef.current = false;
+      return;
+    }
+    if (!compiledPreferenceRef.current) {
+      setCompiledView(true);
+    }
+  }, [mapState]);
 
   useEffect(() => {
     if (locationAction !== "add-road") {
@@ -1334,7 +1268,7 @@ export function WorldMapPage() {
   }, [worldId]);
 
   useEffect(() => {
-    if (!mapState) return;
+    if (!mapState || compiledView) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const reliefRange = computeReliefRange(mapState);
@@ -1378,11 +1312,12 @@ export function WorldMapPage() {
     zoom,
     panOffset,
     viewportSize,
-    selectedCity,
-    roadDraftStart,
-    viewMode,
-    overlayMode,
-  ]);
+      selectedCity,
+      roadDraftStart,
+      viewMode,
+      overlayMode,
+      compiledView,
+    ]);
 
   const mapInfo = useMemo(() => {
     if (!mapState) return null;
@@ -1396,6 +1331,17 @@ export function WorldMapPage() {
       avgTemperature,
     };
   }, [mapState]);
+  const compiledAvailable = !!(mapState?.compiled_grid && mapState?.compiled_iso);
+  const compiledTimestamp = mapState?.compiled_updated_at
+    ? new Date(mapState.compiled_updated_at).toLocaleString()
+    : null;
+  const compiledImage =
+    viewMode === "iso" ? mapState?.compiled_iso ?? null : mapState?.compiled_grid ?? null;
+  const compiledTransform = useMemo(
+    () => `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
+    [panOffset.x, panOffset.y, zoom]
+  );
+
   const handleGenerateMap = () => {
     setMapState(
       generateProceduralMap(
@@ -1440,9 +1386,17 @@ export function WorldMapPage() {
     if (!worldId || !mapState) return;
     setSaving(true);
     try {
-      const saved = await saveWorldMap(worldId, mapState);
+      setStatusMessage("Rendering compiled maps\u2026");
+      const compiled = await generateCompiledRenders(mapState);
+      const payload = {
+        ...mapState,
+        compiled_grid: compiled.grid,
+        compiled_iso: compiled.iso,
+        compiled_updated_at: Date.now(),
+      };
+      const saved = await saveWorldMap(worldId, payload);
       setMapState(ensureExtendedMap(saved));
-      setStatusMessage("Saved map state.");
+      setStatusMessage("Saved map and compiled renders.");
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -1519,6 +1473,14 @@ export function WorldMapPage() {
       return;
     }
     if (primaryAction === "navigate") {
+      const point = screenToMapPoint(event);
+      if (point && mapState && event.button === 0) {
+        const nearest = findNearestCity(mapState, point, 0.035);
+        if (nearest) {
+          setSelectedCity(nearest);
+          setStatusMessage(`Selected ${nearest.name}`);
+        }
+      }
       setIsPanning(true);
       lastPanRef.current = { x: event.clientX, y: event.clientY };
       return;
@@ -1533,7 +1495,10 @@ export function WorldMapPage() {
       const point = screenToMapPoint(event);
       if (point && mapState) {
         const name = draftCityName.trim() || `City ${mapState.cities.length + 1}`;
-        setMapState(addCityToMap(mapState, name, point.x, point.y));
+        const next = addCityToMap(mapState, name, point.x, point.y);
+        setMapState(next.map);
+        setSelectedCity(next.city);
+        setCityEditorCity((prev) => (prev ? next.city : prev));
         setDraftCityName(`City ${mapState.cities.length + 2}`);
         setStatusMessage(`Added ${name}`);
       }
@@ -1615,6 +1580,37 @@ export function WorldMapPage() {
         >
           {saving ? "Saving..." : "Save map"}
         </button>
+      </section>
+      <section className="space-y-2 text-sm">
+        <div className="flex gap-2">
+          <button
+            onClick={() => {
+              compiledPreferenceRef.current = true;
+              setCompiledView(true);
+            }}
+            className="primary-button flex-1 disabled:opacity-50"
+            type="button"
+            disabled={!compiledAvailable || !mapState?.compiled_iso || !mapState?.compiled_grid}
+          >
+            {compiledAvailable ? "View compiled map" : "Save to compile"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              compiledPreferenceRef.current = true;
+              setCompiledView(false);
+            }}
+            className="secondary-button flex-1"
+            disabled={!compiledView}
+          >
+            Back to editor
+          </button>
+        </div>
+        <p className="text-[11px] text-earth-sand/60">
+          {compiledAvailable
+            ? `Last baked: ${compiledTimestamp ?? "unknown"}`
+            : "Save to bake top-down and isometric renders."}
+        </p>
       </section>
       <section className="space-y-2 text-sm">
         <label className="flex items-center justify-between gap-4">
@@ -1753,9 +1749,7 @@ export function WorldMapPage() {
               <p className="text-xs uppercase tracking-[0.2em] text-earth-sand/60">
                 {layer.label}
               </p>
-              <p>
-                {layer.minLabel} ? {layer.maxLabel}
-              </p>
+              <p>{`${layer.minLabel} -> ${layer.maxLabel}`}</p>
             </button>
           ))}
           <div className="flex gap-2">
@@ -1942,8 +1936,62 @@ export function WorldMapPage() {
     </div>
   );
 
+  const renderCompiledPanel = () => (
+    <div className="space-y-4 text-sm">
+      <section className="space-y-2">
+        <p className="text-xs uppercase tracking-[0.3em] text-earth-sand/60">
+          Compiled view
+        </p>
+        <p className="text-earth-sand/80">
+          Using baked top-down / isometric renders with grading and noise.
+        </p>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setCompiledView(false)} className="secondary-button flex-1">
+            Return to editor
+          </button>
+          <button type="button" onClick={handleViewToggle} className="primary-button flex-1">
+            Switch to {viewMode === "iso" ? "Top-down" : "Isometric"}
+          </button>
+        </div>
+        <p className="text-[11px] text-earth-sand/60">
+          {compiledTimestamp
+            ? `Last baked: ${compiledTimestamp}`
+            : "Save the map to bake fresh renders."}
+        </p>
+      </section>
+      <section className="space-y-2">
+        <p className="text-xs uppercase tracking-[0.25em] text-earth-sand/60">
+          Locations
+        </p>
+        <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
+          {mapState?.cities.map((city) => (
+            <button
+              key={city.id}
+              type="button"
+              onClick={() => handleSelectCity(city)}
+              className={`w-full text-left px-3 py-2 rounded border ${
+                selectedCity?.id === city.id
+                  ? "border-brand bg-brand/15"
+                  : "border-earth-clay/30"
+              }`}
+            >
+              <p className="text-sm font-semibold">{city.name}</p>
+              <p className="text-xs text-earth-sand/70">
+                {(city.x * (mapState?.width ?? 0)).toFixed(1)}  |  {(city.y * (mapState?.height ?? 0)).toFixed(1)}
+              </p>
+            </button>
+          ))}
+          {!mapState?.cities.length && (
+            <p className="text-xs text-earth-sand/60">No cities placed yet.</p>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+
   const renderPanel = () => {
     if (!mapState) return null;
+    if (compiledView) return renderCompiledPanel();
     switch (toolGroup) {
       case "general":
         return renderGeneralPanel();
@@ -2024,10 +2072,33 @@ export function WorldMapPage() {
             ref={viewportRef}
             className="h-full w-full relative bg-gradient-to-br from-black via-brand-deep to-black"
           >
+            {compiledView && compiledImage ? (
+              <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                <img
+                  src={compiledImage}
+                  alt="Compiled world map"
+                  className="h-full w-full object-contain select-none pointer-events-none"
+                  style={{
+                    transform: compiledTransform,
+                    transformOrigin: "center center",
+                  }}
+                />
+                <div className="absolute inset-0 bg-gradient-to-br from-black/25 via-transparent to-black/35 pointer-events-none" />
+              </div>
+            ) : null}
+            {compiledView && !compiledImage ? (
+              <div className="absolute inset-0 flex items-center justify-center text-earth-sand/70 text-sm">
+                Save the map to bake the compiled render.
+              </div>
+            ) : null}
             <canvas
               ref={canvasRef}
               className="absolute inset-0"
-              style={{ cursor: cursorStyle }}
+              style={{
+                cursor: cursorStyle,
+                opacity: compiledView ? 0.01 : 1,
+                pointerEvents: "auto",
+              }}
               onMouseDown={handlePointerDown}
               onMouseMove={handlePointerMove}
               onMouseUp={handlePointerUp}
@@ -2037,9 +2108,14 @@ export function WorldMapPage() {
             />
             <div className="absolute top-4 right-4 bg-black/70 backdrop-blur rounded-xl border border-earth-clay/30 px-4 py-3 text-xs space-y-1">
               <p>
-                Primary: {PRIMARY_ACTION_LABEL[primaryAction]}  |  Secondary: Pan
+                {compiledView
+                  ? "Compiled preview \u2014 navigation only"
+                  : `Primary: ${PRIMARY_ACTION_LABEL[primaryAction]}  |  Secondary: Pan`}
               </p>
               <p>View: {viewMode === "iso" ? "Isometric" : "Grid"}</p>
+              {compiledView && compiledTimestamp && (
+                <p>Last baked: {compiledTimestamp}</p>
+              )}
               {roadDraftStart && <p>Road anchor: {roadDraftStart.label}</p>}
             </div>
             {statusMessage && (
@@ -2061,5 +2137,3 @@ export function WorldMapPage() {
     </div>
   );
 }
-
-

@@ -6,11 +6,11 @@ use crate::db::AppState;
 use crate::models::Character;
 
 #[tauri::command]
-pub fn list_characters(
-    state: State<AppState>,
-    world_id: String,
-) -> Result<Vec<Character>, String> {
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+pub fn list_characters(state: State<AppState>, world_id: String) -> Result<Vec<Character>, String> {
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
 
     let mut stmt = conn
         .prepare(
@@ -55,7 +55,10 @@ pub fn create_character(
     let id = Uuid::new_v4().to_string();
     let created_at = Utc::now().timestamp();
 
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     conn.execute(
         "INSERT INTO characters (id, world_id, name, notes, attributes_json, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeOrThrow } from "./client";
 
 export type World = {
   id: string;
@@ -9,25 +9,25 @@ export type World = {
 };
 
 export async function listWorlds(): Promise<World[]> {
-  return await invoke<World[]>("list_worlds");
+  return await invokeOrThrow<World[]>("list_worlds");
 }
 
 export async function createWorld(name: string, gameSystem: string): Promise<World> {
-  return await invoke<World>("create_world", {
+  return await invokeOrThrow<World>("create_world", {
     name,
     gameSystem,
   } as any);
 }
 
 export async function getWorld(id: string): Promise<World> {
-  return await invoke<World>("get_world", { id });
+  return await invokeOrThrow<World>("get_world", { id });
 }
 
 export async function updateWorld(
   id: string,
   world: Pick<World, "name" | "game_system" | "description">
 ): Promise<World> {
-  return await invoke<World>("update_world", {
+  return await invokeOrThrow<World>("update_world", {
     id,
     name: world.name,
     gameSystem: world.game_system,

@@ -85,7 +85,7 @@ export function WorldCharactersPage() {
       </div>
 
       {error && <p className="text-sm text-red-400">Error: {error}</p>}
-      {loading && <p className="text-sm text-slate-400">Loading characters…</p>}
+      {loading && <p className="text-sm text-slate-400">Loading characters...</p>}
 
       <section className="space-y-2">
         <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
@@ -116,7 +116,7 @@ export function WorldCharactersPage() {
           Character template overview
         </h3>
         {templateLoading ? (
-          <p className="text-sm text-slate-500">Loading template…</p>
+          <p className="text-sm text-slate-500">Loading template...</p>
         ) : template ? (
           <div className="space-y-2">
             <p className="text-sm text-slate-200 font-semibold">{template.name}</p>
@@ -152,7 +152,7 @@ export function WorldCharactersPage() {
             >
               <div>
                 <p className="text-sm font-medium">{c.name}</p>
-                <p className="text-xs text-slate-500">ID: {c.id.slice(0, 8)}…</p>
+                <p className="text-xs text-slate-500">ID: {c.id.slice(0, 8)}...</p>
               </div>
             </li>
           ))}

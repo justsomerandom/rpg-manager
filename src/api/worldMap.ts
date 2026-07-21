@@ -1,4 +1,4 @@
-﻿import { invoke } from "@tauri-apps/api/core";
+import { invokeOrThrow } from "./client";
 
 export type MapCity = {
   id: string;
@@ -32,19 +32,21 @@ export type MapState = {
   roads: MapRoad[];
   temperature?: number[];
   vegetation?: number[];
+  compiled_grid?: string;
+  compiled_iso?: string;
+  compiled_updated_at?: number;
 };
 
 export async function getWorldMap(worldId: string): Promise<MapState | null> {
-  return await invoke<MapState | null>("get_world_map", { worldId });
+  return await invokeOrThrow<MapState | null>("get_world_map", { worldId });
 }
 
 export async function saveWorldMap(
   worldId: string,
   map: MapState
 ): Promise<MapState> {
-  return await invoke<MapState>("save_world_map", {
+  return await invokeOrThrow<MapState>("save_world_map", {
     worldId,
     map,
   });
 }
-

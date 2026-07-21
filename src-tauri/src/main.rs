@@ -7,6 +7,7 @@ use tauri::Manager;
 
 mod commands;
 mod db;
+mod json_store;
 mod models;
 
 use commands::*;
@@ -24,8 +25,7 @@ fn main() {
 
             let db_path = app_dir.join("ttrpg-manager.db");
 
-            let conn =
-                Connection::open(db_path).map_err(|e| format!("Failed to open DB: {e}"))?;
+            let conn = Connection::open(db_path).map_err(|e| format!("Failed to open DB: {e}"))?;
 
             init_db(&conn).map_err(|e| format!("Failed to init DB: {e}"))?;
 

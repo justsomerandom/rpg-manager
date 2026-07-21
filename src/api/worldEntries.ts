@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeOrThrow } from "./client";
 
 export const WORLD_ENTRY_CATEGORIES = [
   "magic_system",
@@ -25,7 +25,7 @@ export async function listWorldEntries(
   worldId: string,
   category?: WorldEntryCategory
 ): Promise<WorldEntry[]> {
-  return await invoke<WorldEntry[]>("list_world_entries", {
+  return await invokeOrThrow<WorldEntry[]>("list_world_entries", {
     worldId,
     world_id: worldId,
     category,
@@ -40,7 +40,7 @@ export async function createWorldEntry(
   body: string,
   metadataJson?: string
 ): Promise<WorldEntry> {
-  return await invoke<WorldEntry>("create_world_entry", {
+  return await invokeOrThrow<WorldEntry>("create_world_entry", {
     worldId,
     world_id: worldId,
     category,
@@ -59,7 +59,7 @@ export async function updateWorldEntry(
   body: string,
   metadataJson?: string
 ): Promise<WorldEntry> {
-  return await invoke<WorldEntry>("update_world_entry", {
+  return await invokeOrThrow<WorldEntry>("update_world_entry", {
     id,
     title,
     summary,
@@ -70,5 +70,5 @@ export async function updateWorldEntry(
 }
 
 export async function deleteWorldEntry(id: string): Promise<void> {
-  await invoke("delete_world_entry", { id });
+  await invokeOrThrow("delete_world_entry", { id });
 }

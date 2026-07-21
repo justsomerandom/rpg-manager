@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeOrThrow } from "./client";
 
 export type LoreBook = {
   id: string;
@@ -17,7 +17,7 @@ export type LoreEntry = {
 };
 
 export async function listLoreBooks(worldId: string): Promise<LoreBook[]> {
-  return await invoke<LoreBook[]>("list_lore_books", {
+  return await invokeOrThrow<LoreBook[]>("list_lore_books", {
     worldId,
     world_id: worldId,
   });
@@ -28,7 +28,7 @@ export async function createLoreBook(
   title: string,
   summary: string
 ): Promise<LoreBook> {
-  return await invoke<LoreBook>("create_lore_book", {
+  return await invokeOrThrow<LoreBook>("create_lore_book", {
     worldId,
     world_id: worldId,
     title,
@@ -37,7 +37,7 @@ export async function createLoreBook(
 }
 
 export async function listLoreEntries(bookId: string): Promise<LoreEntry[]> {
-  return await invoke<LoreEntry[]>("list_lore_entries", {
+  return await invokeOrThrow<LoreEntry[]>("list_lore_entries", {
     bookId,
     book_id: bookId,
   });
@@ -48,7 +48,7 @@ export async function createLoreEntry(
   title: string,
   content: string
 ): Promise<LoreEntry> {
-  return await invoke<LoreEntry>("create_lore_entry", {
+  return await invokeOrThrow<LoreEntry>("create_lore_entry", {
     bookId,
     book_id: bookId,
     title,

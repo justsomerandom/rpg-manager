@@ -87,6 +87,12 @@ pub struct MapState {
     pub temperature: Vec<f32>,
     #[serde(default)]
     pub vegetation: Vec<f32>,
+    #[serde(default)]
+    pub compiled_grid: Option<String>,
+    #[serde(default)]
+    pub compiled_iso: Option<String>,
+    #[serde(default)]
+    pub compiled_updated_at: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

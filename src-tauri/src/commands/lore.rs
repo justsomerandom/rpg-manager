@@ -6,11 +6,11 @@ use crate::db::AppState;
 use crate::models::{LoreBook, LoreEntry};
 
 #[tauri::command]
-pub fn list_lore_books(
-    state: State<AppState>,
-    world_id: String,
-) -> Result<Vec<LoreBook>, String> {
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+pub fn list_lore_books(state: State<AppState>, world_id: String) -> Result<Vec<LoreBook>, String> {
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     let mut stmt = conn
         .prepare(
             "SELECT id, world_id, title, summary, created_at
@@ -52,7 +52,10 @@ pub fn create_lore_book(
 
     let id = Uuid::new_v4().to_string();
     let created_at = Utc::now().timestamp();
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     conn.execute(
         "INSERT INTO world_lore_books (id, world_id, title, summary, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -74,7 +77,10 @@ pub fn list_lore_entries(
     state: State<AppState>,
     book_id: String,
 ) -> Result<Vec<LoreEntry>, String> {
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     let mut stmt = conn
         .prepare(
             "SELECT id, book_id, title, content, created_at
@@ -115,7 +121,10 @@ pub fn create_lore_entry(
     }
     let id = Uuid::new_v4().to_string();
     let created_at = Utc::now().timestamp();
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     conn.execute(
         "INSERT INTO world_lore_entries (id, book_id, title, content, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",

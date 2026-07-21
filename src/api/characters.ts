@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeOrThrow } from "./client";
 
 export type Character = {
   id: string;
@@ -10,12 +10,12 @@ export type Character = {
 };
 
 export async function listCharacters(worldId: string): Promise<Character[]> {
-  return await invoke<Character[]>("list_characters", { worldId });
+  return await invokeOrThrow<Character[]>("list_characters", { worldId });
 }
 
 export async function createCharacter(
   worldId: string,
   name: string
 ): Promise<Character> {
-  return await invoke<Character>("create_character", { worldId, name });
+  return await invokeOrThrow<Character>("create_character", { worldId, name });
 }

@@ -11,7 +11,10 @@ pub fn list_world_templates(
     world_id: String,
     template_type: Option<String>,
 ) -> Result<Vec<WorldTemplate>, String> {
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
 
     let mut templates = Vec::new();
     if let Some(t_type) = template_type {
@@ -77,7 +80,10 @@ pub fn save_world_templates(
     world_id: String,
     templates: Vec<TemplateInput>,
 ) -> Result<Vec<WorldTemplate>, String> {
-    let mut conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let mut conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     let tx = conn
         .transaction()
         .map_err(|e| format!("Failed to start transaction: {e}"))?;

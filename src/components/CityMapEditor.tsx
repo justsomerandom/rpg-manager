@@ -286,7 +286,7 @@ export function CityMapEditor({ city, onClose }: Props) {
         <header className="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold text-white">
-              {city.name} · City Mapper
+              {city.name} - City Mapper
             </h2>
             <p className="text-xs text-slate-400">
               Sculpt roads and districts for this settlement.
@@ -302,7 +302,7 @@ export function CityMapEditor({ city, onClose }: Props) {
         <div className="flex-1 grid lg:grid-cols-2 overflow-hidden">
           <div className="border-r border-slate-800 p-4 flex flex-col gap-3 overflow-hidden">
             {loading || !mapData ? (
-              <p className="text-sm text-slate-400">Loading city map…</p>
+              <p className="text-sm text-slate-400">Loading city map...</p>
             ) : (
               <>
                 <svg
@@ -449,7 +449,7 @@ export function CityMapEditor({ city, onClose }: Props) {
                     className="flex items-center justify-between border border-slate-800 rounded px-2 py-1"
                   >
                     <span>
-                      {building.name} · {building.kind}
+                      {building.name} - {building.kind}
                     </span>
                     <button
                       className="text-[10px] text-red-300"
@@ -474,7 +474,7 @@ export function CityMapEditor({ city, onClose }: Props) {
                   >
                     <summary className="px-3 py-2 text-xs text-slate-200 flex justify-between cursor-pointer">
                       <span>
-                        {road.name} · {road.importance}
+                        {road.name} - {road.importance}
                       </span>
                       <span>{road.points.length} pts</span>
                     </summary>
@@ -530,7 +530,7 @@ export function CityMapEditor({ city, onClose }: Props) {
                 disabled={saving}
                 className="px-4 py-2 rounded bg-sky-600 text-sm disabled:opacity-50"
               >
-                {saving ? "Saving…" : "Save city map"}
+                {saving ? "Saving..." : "Save city map"}
               </button>
               <p className="text-[10px] text-slate-500">
                 Roads render as editable curves. Drag sliders to adjust control points.

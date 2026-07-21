@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeOrThrow } from "./client";
 
 export type TemplateType =
   | "character"
@@ -26,7 +26,7 @@ export async function listWorldTemplates(
   worldId: string,
   templateType?: TemplateType
 ): Promise<WorldTemplate[]> {
-  return await invoke<WorldTemplate[]>("list_world_templates", {
+  return await invokeOrThrow<WorldTemplate[]>("list_world_templates", {
     worldId,
     world_id: worldId,
     templateType,
@@ -38,7 +38,7 @@ export async function saveWorldTemplates(
   worldId: string,
   templates: TemplateDefinitionPayload[]
 ): Promise<WorldTemplate[]> {
-  return await invoke<WorldTemplate[]>("save_world_templates", {
+  return await invokeOrThrow<WorldTemplate[]>("save_world_templates", {
     worldId,
     world_id: worldId,
     templates,

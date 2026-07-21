@@ -7,7 +7,10 @@ use crate::models::World;
 
 #[tauri::command]
 pub fn list_worlds(state: State<AppState>) -> Result<Vec<World>, String> {
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
 
     let mut stmt = conn
         .prepare(
@@ -51,7 +54,10 @@ pub fn create_world(
     let created_at = Utc::now().timestamp();
     let game_system = game_system.trim().to_string();
 
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     conn.execute(
         "INSERT INTO worlds (id, name, game_system, description, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -70,7 +76,10 @@ pub fn create_world(
 
 #[tauri::command]
 pub fn get_world(state: State<AppState>, id: String) -> Result<World, String> {
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
 
     let mut stmt = conn
         .prepare(
@@ -106,7 +115,10 @@ pub fn update_world(
         return Err("World name cannot be empty".into());
     }
 
-    let conn = state.conn.lock().map_err(|_| "DB mutex poisoned".to_string())?;
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| "DB mutex poisoned".to_string())?;
     conn.execute(
         "UPDATE worlds
          SET name = ?1,

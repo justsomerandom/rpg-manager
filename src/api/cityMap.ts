@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeOrThrow } from "./client";
 
 export type CityRoadPoint = {
   id: string;
@@ -35,14 +35,14 @@ export type CityMap = {
 };
 
 export async function getCityMap(cityId: string): Promise<CityMap | null> {
-  return await invoke<CityMap | null>("get_city_map", {
+  return await invokeOrThrow<CityMap | null>("get_city_map", {
     cityId,
     city_id: cityId,
   });
 }
 
 export async function saveCityMap(cityId: string, map: CityMap): Promise<CityMap> {
-  return await invoke<CityMap>("save_city_map", {
+  return await invokeOrThrow<CityMap>("save_city_map", {
     cityId,
     city_id: cityId,
     map,

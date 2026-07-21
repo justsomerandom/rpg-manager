@@ -51,7 +51,7 @@ export function WorldOverviewPage() {
       <div>
         <h2 className="text-lg font-bold mb-2">Campaign Overview</h2>
         <p className="text-slate-300 text-sm">
-          Basic metadata for this world. We’ll add PCs, timelines and session
+          Basic metadata for this world. We'll add PCs, timelines and session
           tracking here later.
         </p>
       </div>
@@ -94,7 +94,7 @@ export function WorldOverviewPage() {
           <textarea
             rows={5}
             className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-            placeholder="Short pitch, themes, vibes…"
+            placeholder="Short pitch, themes, vibes..."
             value={world.description}
             onChange={(e) =>
               setWorld((prev) =>

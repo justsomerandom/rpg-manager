@@ -120,7 +120,7 @@ export function WorldLorePage() {
             </p>
           </div>
           {loadingBooks ? (
-            <p className="text-xs text-slate-500">Loading books…</p>
+            <p className="text-xs text-slate-500">Loading books...</p>
           ) : books.length === 0 ? (
             <p className="text-xs text-slate-500">
               No books yet. Create one below.
@@ -163,7 +163,7 @@ export function WorldLorePage() {
               disabled={creatingBook || !newBookTitle.trim()}
               className="w-full px-3 py-2 rounded bg-sky-600 text-xs disabled:opacity-50"
             >
-              {creatingBook ? "Creating…" : "Create book"}
+              {creatingBook ? "Creating..." : "Create book"}
             </button>
           </div>
         </div>
@@ -177,7 +177,7 @@ export function WorldLorePage() {
                 </h3>
                 <p className="text-xs text-slate-500">
                   {loadingEntries
-                    ? "Loading entries…"
+                    ? "Loading entries..."
                     : `${entries.length} entries in this lore book.`}
                 </p>
               </div>
@@ -233,7 +233,7 @@ export function WorldLorePage() {
                   }
                   className="px-4 py-2 rounded bg-emerald-600 text-sm disabled:opacity-50"
                 >
-                  {creatingEntry ? "Adding…" : "Add entry"}
+                  {creatingEntry ? "Adding..." : "Add entry"}
                 </button>
               </div>
             </>
