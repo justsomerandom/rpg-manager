@@ -1506,7 +1506,7 @@ export function WorldMapPage() {
         const next = addCityToMap(mapState, name, point.x, point.y);
         setMapState(next.map);
         setSelectedCity(next.city);
-        setCityEditorCity((prev) => (prev ? next.city : prev));
+        setCityEditorCity(next.city);
         setDraftCityName(`City ${mapState.cities.length + 2}`);
         setStatusMessage(`Added ${name}`);
       }

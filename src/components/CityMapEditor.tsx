@@ -8,11 +8,11 @@ type Props = {
   onClose: () => void;
 };
 
-const CITY_SIZES: { key: CitySize; label: string; baseRoads: number }[] = [
-  { key: "village", label: "Village", baseRoads: 3 },
-  { key: "town", label: "Town", baseRoads: 5 },
-  { key: "city", label: "City", baseRoads: 7 },
-  { key: "megapolis", label: "Megapolis", baseRoads: 10 },
+const CITY_SIZES: { key: CitySize; label: string; avenues: number; fillers: number }[] = [
+  { key: "village", label: "Village", avenues: 3, fillers: 16 },
+  { key: "town", label: "Town", avenues: 4, fillers: 42 },
+  { key: "city", label: "City", avenues: 6, fillers: 100 },
+  { key: "megapolis", label: "Megapolis", avenues: 8, fillers: 220 },
 ];
 
 const BUILDING_TYPES = [
@@ -27,7 +27,12 @@ const SVG_SIZE = 520;
 type PendingBuilding = {
   name: string;
   kind: (typeof BUILDING_TYPES)[number]["key"];
+  role?: string;
+  district?: District;
 };
+
+type District = "centre" | "midtown" | "edge" | "outskirts";
+const SPECIAL_TYPES = ["Palace / keep", "Temple", "Market hall", "Guildhall", "Barracks", "Library", "Harbour", "Academy"];
 
 function randomId() {
   return Math.random().toString(36).slice(2, 9);
@@ -41,48 +46,44 @@ function pseudoRandom(seed: number) {
   };
 }
 
-function generateRoadPoints(
-  count: number,
-  rng: () => number
-): CityRoadPoint[] {
-  const points: CityRoadPoint[] = [];
-  const angle = rng() * Math.PI * 2;
-  const radiusStep = 0.25 + rng() * 0.25;
-  for (let i = 0; i < count; i += 1) {
-    const r = Math.min(1, (i + 1) * radiusStep);
-    const jitter = (rng() - 0.5) * 0.15;
-    points.push({
-      id: randomId(),
-      x: 0.5 + Math.cos(angle + jitter) * r * 0.5,
-      y: 0.5 + Math.sin(angle - jitter) * r * 0.5,
-    });
-  }
-  return points;
+function point(radius: number, angle: number) {
+  return { id: randomId(), x: clamp(0.5 + Math.cos(angle) * radius), y: clamp(0.5 + Math.sin(angle) * radius) };
 }
 
-function generateCityMap(city: MapCity, size: CitySize, seed = Date.now()): CityMap {
+function generateCityMap(city: MapCity, size: CitySize, scale = 1, seed = Date.now()): CityMap {
   const sizeMeta = CITY_SIZES.find((s) => s.key === size) ?? CITY_SIZES[0];
   const rng = pseudoRandom(seed);
   const roads: CityRoad[] = [];
-  const primaryRoads = Math.max(sizeMeta.baseRoads - 2, 2);
-  for (let i = 0; i < sizeMeta.baseRoads; i += 1) {
-    const importance = i < primaryRoads ? "main" : "secondary";
+  const avenues = Math.max(3, Math.round(sizeMeta.avenues * scale));
+  const radius = clamp(0.23 + scale * 0.14, 0.28, 0.46);
+  for (let i = 0; i < avenues; i += 1) {
+    const angle = (Math.PI * 2 * i) / avenues + (rng() - 0.5) * 0.18;
     roads.push({
       id: randomId(),
-      name: `${importance === "main" ? "Avenue" : "Street"} ${i + 1}`,
-      importance,
-      points: generateRoadPoints(4 + Math.floor(rng() * 3), rng),
+      name: `Radial Avenue ${i + 1}`,
+      importance: "main",
+      points: [point(0.025, angle), point(radius * 0.42, angle + (rng() - 0.5) * 0.12), point(radius, angle)],
     });
   }
+  const rings = scale > 1.05 ? 2 : 1;
+  for (let ring = 1; ring <= rings; ring += 1) {
+    const ringRadius = radius * (ring / (rings + 1));
+    roads.push({ id: randomId(), name: ring === 1 ? "Market Ring" : "Outer Ring", importance: "secondary", points: Array.from({ length: avenues + 1 }, (_, i) => point(ringRadius, (Math.PI * 2 * i) / avenues)) });
+  }
+  const buildings = Array.from({ length: Math.round(sizeMeta.fillers * scale) }, () => {
+    const angle = rng() * Math.PI * 2;
+    const spread = 0.06 + Math.sqrt(rng()) * radius * 0.92;
+    return { id: randomId(), name: "Residence", kind: "private" as const, x: clamp(0.5 + Math.cos(angle) * spread), y: clamp(0.5 + Math.sin(angle) * spread), footprint: 0.009 + rng() * 0.008 };
+  });
 
   return {
     city_id: city.id,
     size_label: size,
     width: 1,
     height: 1,
-    seed,
+    seed, scale,
     roads,
-    buildings: [],
+    buildings,
   };
 }
 
@@ -90,11 +91,11 @@ function clamp(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
 }
 
-function integrateBuildingWithRoads(
-  map: CityMap,
-  pending: PendingBuilding,
-  coordinates: { x: number; y: number }
-): CityMap {
+function placeSpecialBuilding(map: CityMap, pending: PendingBuilding, rngSeed = Date.now()): CityMap {
+  const rng = pseudoRandom(rngSeed);
+  const radius = pending.district === "centre" ? 0.04 : pending.district === "midtown" ? 0.17 : pending.district === "edge" ? 0.3 : 0.4;
+  const angle = rng() * Math.PI * 2;
+  const coordinates = { x: clamp(0.5 + Math.cos(angle) * radius), y: clamp(0.5 + Math.sin(angle) * radius) };
   const buildings = [
     ...map.buildings,
     {
@@ -103,54 +104,13 @@ function integrateBuildingWithRoads(
       kind: pending.kind,
       x: coordinates.x,
       y: coordinates.y,
-      footprint: pending.kind === "public" ? 0.07 : 0.04,
+      footprint: pending.kind === "public" || pending.kind === "market" ? 0.035 : 0.022,
+      role: pending.role,
+      district: pending.district,
     },
   ];
 
-  const roads = map.roads.map((road) => ({ ...road, points: road.points.slice() }));
-  if (pending.kind === "private" || pending.kind === "utility") {
-    // add a small alley branching off the closest road
-    const target =
-      roads
-        .map((road) => ({
-          road,
-          dist: road.points.reduce(
-            (min, point) =>
-              Math.min(min, Math.hypot(point.x - coordinates.x, point.y - coordinates.y)),
-            Number.MAX_VALUE
-          ),
-        }))
-        .sort((a, b) => a.dist - b.dist)[0]?.road ?? roads[0];
-    const lastPoint = target.points[target.points.length - 1];
-    const stubId = randomId();
-    const alley = {
-      id: stubId,
-      name: `${pending.name} Lane`,
-      importance: "alley" as const,
-      points: [
-        {
-          id: randomId(),
-          x: lastPoint ? (lastPoint.x + coordinates.x) / 2 : coordinates.x,
-          y: lastPoint ? (lastPoint.y + coordinates.y) / 2 : coordinates.y,
-        },
-        { id: randomId(), x: coordinates.x, y: coordinates.y },
-      ],
-    };
-    roads.push(alley);
-  } else {
-    const mainRoad =
-      roads.find((road) => road.importance === "main") ?? roads[0];
-    if (mainRoad) {
-      const insertIndex = Math.floor(mainRoad.points.length / 2);
-      mainRoad.points.splice(insertIndex, 0, {
-        id: randomId(),
-        x: coordinates.x,
-        y: coordinates.y,
-      });
-    }
-  }
-
-  return { ...map, roads, buildings };
+  return { ...map, buildings };
 }
 
 export function CityMapEditor({ city, onClose }: Props) {
@@ -162,6 +122,8 @@ export function CityMapEditor({ city, onClose }: Props) {
   const [buildingName, setBuildingName] = useState(`${city.name} Hall`);
   const [buildingKind, setBuildingKind] =
     useState<(typeof BUILDING_TYPES)[number]["key"]>("public");
+  const [specialType, setSpecialType] = useState(SPECIAL_TYPES[0]);
+  const [district, setDistrict] = useState<District>("centre");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -189,14 +151,9 @@ export function CityMapEditor({ city, onClose }: Props) {
     [mapData?.size_label]
   );
 
-  const handleSvgClick = (event: React.MouseEvent<SVGSVGElement>) => {
+  const handleSvgClick = () => {
     if (!mapData || !placingBuilding) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = clamp((event.clientX - rect.left) / rect.width);
-    const y = clamp((event.clientY - rect.top) / rect.height);
-    setMapData(
-      integrateBuildingWithRoads(mapData, placingBuilding, { x, y })
-    );
+    setMapData(placeSpecialBuilding(mapData, placingBuilding));
     setPlacingBuilding(null);
     setBuildingName(`${city.name} Hall`);
   };
@@ -204,11 +161,7 @@ export function CityMapEditor({ city, onClose }: Props) {
   const handleRandomizeRoads = () => {
     if (!mapData) return;
     const seed = Date.now();
-    setMapData({
-      ...mapData,
-      seed,
-      roads: generateCityMap(city, mapData.size_label, seed).roads,
-    });
+    setMapData(generateCityMap(city, mapData.size_label, mapData.scale ?? 1, seed));
     setStatus("Regenerated road layout.");
   };
 
@@ -218,6 +171,11 @@ export function CityMapEditor({ city, onClose }: Props) {
       ...mapData,
       size_label: size,
     });
+  };
+
+  const handleScaleChange = (scale: number) => {
+    if (!mapData) return;
+    setMapData(generateCityMap(city, mapData.size_label, scale, mapData.seed));
   };
 
   const updateRoadPoint = (roadId: string, pointId: string, patch: Partial<CityRoadPoint>) => {
@@ -363,7 +321,7 @@ export function CityMapEditor({ city, onClose }: Props) {
                 </svg>
                 {placingBuilding && (
                   <p className="text-xs text-amber-300">
-                    Click on the map to place {placingBuilding.name}.
+                    Click to generate {placingBuilding.name} in the selected district.
                   </p>
                 )}
               </>
@@ -400,8 +358,13 @@ export function CityMapEditor({ city, onClose }: Props) {
                 </button>
               </div>
               <p className="text-[11px] text-slate-500">
-                {sizeMeta.label}: {sizeMeta.baseRoads} base roads.
+                {sizeMeta.label}: {sizeMeta.avenues} base avenues and {sizeMeta.fillers} filler buildings.
               </p>
+              <label className="flex items-center gap-3 text-xs text-slate-400">
+                Settlement scale
+                <input type="range" min={0.6} max={2} step={0.1} value={mapData?.scale ?? 1} onChange={(e) => handleScaleChange(Number(e.target.value))} />
+                <span>{(mapData?.scale ?? 1).toFixed(1)}x</span>
+              </label>
             </section>
 
             <section className="space-y-2">
@@ -434,13 +397,23 @@ export function CityMapEditor({ city, onClose }: Props) {
                     setPlacingBuilding({
                       name: buildingName.trim(),
                       kind: buildingKind,
+                      role: specialType,
+                      district,
                     });
                     setStatus("Click on the map to place the building.");
                   }}
                   className="text-xs px-3 py-2 rounded bg-emerald-600 text-white"
                 >
-                  Place building
+                  Add special building
                 </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <select className="rounded border border-slate-700 bg-slate-900 px-2 py-2" value={specialType} onChange={(e) => setSpecialType(e.target.value)}>
+                  {SPECIAL_TYPES.map((type) => <option key={type}>{type}</option>)}
+                </select>
+                <select className="rounded border border-slate-700 bg-slate-900 px-2 py-2" value={district} onChange={(e) => setDistrict(e.target.value as District)}>
+                  <option value="centre">City centre</option><option value="midtown">Midtown</option><option value="edge">Edge</option><option value="outskirts">Outskirts</option>
+                </select>
               </div>
               <ul className="space-y-1 text-xs text-slate-300 max-h-28 overflow-y-auto pr-1">
                 {mapData?.buildings.map((building) => (
@@ -449,7 +422,7 @@ export function CityMapEditor({ city, onClose }: Props) {
                     className="flex items-center justify-between border border-slate-800 rounded px-2 py-1"
                   >
                     <span>
-                      {building.name} - {building.kind}
+                      {building.name} - {building.role ?? building.kind}{building.district ? ` (${building.district})` : ""}
                     </span>
                     <button
                       className="text-[10px] text-red-300"

@@ -118,6 +118,10 @@ pub struct CityBuilding {
     pub x: f64,
     pub y: f64,
     pub footprint: f64,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub district: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -127,9 +131,13 @@ pub struct CityMap {
     pub width: u32,
     pub height: u32,
     pub seed: u64,
+    #[serde(default = "default_city_scale")]
+    pub scale: f64,
     pub roads: Vec<CityRoad>,
     pub buildings: Vec<CityBuilding>,
 }
+
+fn default_city_scale() -> f64 { 1.0 }
 
 #[derive(Serialize)]
 pub struct LoreBook {

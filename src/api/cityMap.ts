@@ -20,6 +20,8 @@ export type CityBuilding = {
   x: number;
   y: number;
   footprint: number;
+  role?: string;
+  district?: "centre" | "midtown" | "edge" | "outskirts";
 };
 
 export type CitySize = "village" | "town" | "city" | "megapolis";
@@ -30,6 +32,7 @@ export type CityMap = {
   width: number;
   height: number;
   seed: number;
+  scale?: number;
   roads: CityRoad[];
   buildings: CityBuilding[];
 };
