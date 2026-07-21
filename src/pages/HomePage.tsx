@@ -511,12 +511,12 @@ export function HomePage() {
     }
   };
   return (
-    <div className="max-w-5xl mx-auto space-y-6 p-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-bold text-slate-100">RPG Manager</h1>
-        <p className="text-sm text-slate-400">
+    <div className="page-shell max-w-7xl mx-auto p-2 sm:p-6">
+      <header className="page-header">
+        <div><p className="section-label">Your campaign workspace</p><h1 className="page-title mt-1">RPG Manager</h1>
+        <p className="page-description mt-2">
           Define worlds, then lock their character, NPC, item, ability, and custom entity templates.
-        </p>
+        </p></div>
       </header>
 
       {error && (
@@ -525,7 +525,7 @@ export function HomePage() {
         </div>
       )}
 
-      <section className="space-y-3 border border-slate-800 rounded-lg p-4 bg-slate-950/40">
+      <section className="section-card space-y-4">
         <h2 className="text-sm font-semibold text-slate-200 uppercase tracking-wide">
           World basics
         </h2>
@@ -559,7 +559,7 @@ export function HomePage() {
         </div>
       </section>
 
-      <section className="space-y-3 border border-slate-800 rounded-lg p-4">
+      <section className="section-card space-y-4">
         <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">
           Existing worlds
         </h2>

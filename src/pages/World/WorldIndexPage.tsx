@@ -216,13 +216,10 @@ export function WorldIndexPage() {
   const templateData = searchTerm.trim() ? templateMatches : grouped;
 
   return (
-    <div className="h-full w-full flex flex-col space-y-4 overflow-hidden">
-      <header className="space-y-2">
-        <h2 className="text-2xl font-semibold text-brand-glow">World Index</h2>
-        <p className="text-sm text-earth-sand/70">
+    <div className="h-full w-full flex flex-col space-y-5 overflow-hidden">
+      <header className="page-header shrink-0"><div><p className="section-label">Campaign codex</p><h2 className="page-title mt-1">World index</h2><p className="page-description mt-2">
           Keep a diegetic wiki of factions, relics, and NPCs while referencing locked-in templates.
-        </p>
-      </header>
+        </p></div></header>
 
       {error && <p className="text-sm text-red-400">Error: {error}</p>}
       {loading && <p className="text-xs text-earth-sand/70">Loading template definitions...</p>}

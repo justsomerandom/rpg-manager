@@ -99,18 +99,15 @@ export function WorldLorePage() {
   }
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      <header>
-        <h2 className="text-lg font-bold mb-2">Lore Library</h2>
-        <p className="text-slate-300 text-sm">
+    <div className="page-shell">
+      <header className="page-header"><div><p className="section-label">Setting archive</p><h2 className="page-title mt-1">Lore library</h2><p className="page-description mt-2">
           Organize setting lore into curated books, then add chapters of text entries.
-        </p>
-      </header>
+        </p></div></header>
 
-      {error && <p className="text-sm text-red-400">Error: {error}</p>}
+      {error && <p className="status-error">{error}</p>}
 
       <section className="grid md:grid-cols-3 gap-4">
-        <div className="space-y-4 border border-slate-800 rounded-lg p-4 bg-slate-950/40">
+        <div className="section-card space-y-4">
           <div>
             <h3 className="text-sm font-semibold text-slate-200">
               Lore books
@@ -168,7 +165,7 @@ export function WorldLorePage() {
           </div>
         </div>
 
-        <div className="md:col-span-2 border border-slate-800 rounded-lg p-4 bg-slate-950/40 space-y-4">
+        <div className="md:col-span-2 section-card space-y-5">
           {selectedBookId ? (
             <>
               <div className="space-y-1">

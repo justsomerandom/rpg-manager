@@ -277,26 +277,26 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-5xl h-full max-h-[90vh] flex flex-col overflow-hidden">
-        <header className="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
+      <div className="glass-panel w-full max-w-6xl h-full max-h-[92vh] flex flex-col overflow-hidden">
+        <header className="px-5 py-4 border-b border-grove-600 flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold text-white">
               {city.name} - City Mapper
             </h2>
             <p className="text-xs text-slate-400">
-              Sculpt roads and districts for this settlement.
+              Live settlement plan · {externalConnections.length} world-road approach{externalConnections.length === 1 ? "" : "es"}
             </p>
           </div>
           <button
             onClick={onClose}
-            className="text-xs px-3 py-1.5 rounded border border-slate-600 hover:border-slate-400"
+            className="secondary-button !px-3 !py-1.5"
           >
             Close
           </button>
         </header>
         <div className="flex-1 grid lg:grid-cols-2 overflow-hidden">
-          <div className="border-r border-slate-800 p-4 flex flex-col gap-3 overflow-hidden">
+          <div className="border-r border-grove-600 p-5 flex flex-col gap-3 overflow-hidden bg-grove-950/30">
             {loading || !mapData ? (
               <p className="text-sm text-slate-400">Loading city map...</p>
             ) : (
@@ -305,7 +305,7 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                   width={SVG_SIZE}
                   height={SVG_SIZE}
                   viewBox="0 0 1 1"
-                  className="w-full max-h-[320px] bg-slate-950/60 border border-slate-800 rounded"
+                  className="w-full max-h-[520px] flex-1 bg-slate-950/60 border border-grove-600 rounded-2xl shadow-inner"
                   onClick={handleSvgClick}
                 >
                   <defs>
@@ -377,7 +377,7 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
               </>
             )}
           </div>
-          <div className="p-4 space-y-4 overflow-y-auto">
+          <div className="p-5 space-y-5 overflow-y-auto bg-grove-900/30">
             {error && <p className="text-xs text-red-400">Error: {error}</p>}
             {status && (
               <p className="text-xs text-sky-300 bg-sky-900/10 border border-sky-900 px-3 py-2 rounded">
@@ -417,7 +417,7 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
               </label>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <label className="space-y-1 text-slate-400">Street plan
-                  <select className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-2" value={mapData?.road_architecture ?? "ring"} onChange={(e) => regenerateLayout(e.target.value as RoadArchitecture, (mapData?.road_theme ?? "fantasy") as RoadTheme)}>
+                  <select className="input-field !py-2" value={mapData?.road_architecture ?? "ring"} onChange={(e) => regenerateLayout(e.target.value as RoadArchitecture, (mapData?.road_theme ?? "elvish") as RoadTheme)}>
                     <option value="ring">Ring & radial</option><option value="grid">Grid / orthogonal</option><option value="star">Star / civic core</option><option value="organic">Organic / historic</option>
                   </select>
                 </label>

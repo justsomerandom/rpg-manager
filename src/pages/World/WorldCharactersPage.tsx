@@ -75,25 +75,22 @@ export function WorldCharactersPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-3xl">
-      <div>
-        <h2 className="text-lg font-bold mb-2">Player Characters</h2>
-        <p className="text-slate-300 text-sm">
+    <div className="page-shell max-w-5xl">
+      <header className="page-header"><div><p className="section-label">Party roster</p><h2 className="page-title mt-1">Player characters</h2><p className="page-description mt-2">
           All heroes share a universal sheet defined during world creation. Standard
           inventory slots are automatically added outside of the template.
-        </p>
-      </div>
+        </p></div></header>
 
-      {error && <p className="text-sm text-red-400">Error: {error}</p>}
+      {error && <p className="status-error">{error}</p>}
       {loading && <p className="text-sm text-slate-400">Loading characters...</p>}
 
-      <section className="space-y-2">
+      <section className="section-card space-y-3">
         <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
           Add character
         </h3>
         <div className="flex gap-2">
           <input
-            className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+            className="input-field flex-1"
             placeholder="Character name"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -104,14 +101,14 @@ export function WorldCharactersPage() {
           <button
             onClick={handleCreate}
             disabled={creating || !newName.trim()}
-            className="px-3 py-2 rounded bg-sky-600 text-xs disabled:opacity-50"
+            className="primary-button"
           >
             {creating ? "Adding..." : "Add"}
           </button>
         </div>
       </section>
 
-      <section className="space-y-3 border border-slate-800 rounded-lg p-4 bg-slate-950/50">
+      <section className="section-card space-y-3">
         <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
           Character template overview
         </h3>
@@ -137,7 +134,7 @@ export function WorldCharactersPage() {
         </p>
       </section>
 
-      <section className="space-y-2">
+      <section className="section-card space-y-3">
         <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
           Characters
         </h3>

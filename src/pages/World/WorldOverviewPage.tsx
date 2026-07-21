@@ -40,31 +40,28 @@ export function WorldOverviewPage() {
   };
 
   if (loading) {
-    return <p className="text-sm text-slate-400">Loading world...</p>;
+    return <p className="status-info">Loading campaign…</p>;
   }
   if (!world) {
     return <p className="text-sm text-red-400">World not found.</p>;
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div>
-        <h2 className="text-lg font-bold mb-2">Campaign Overview</h2>
-        <p className="text-slate-300 text-sm">
+    <div className="page-shell max-w-4xl">
+      <header className="page-header"><div><p className="section-label">Campaign settings</p><h2 className="page-title mt-1">Campaign overview</h2><p className="page-description mt-2">
           Basic metadata for this world. We'll add PCs, timelines and session
           tracking here later.
-        </p>
-      </div>
+        </p></div></header>
 
-      {error && <p className="text-sm text-red-400">Error: {error}</p>}
+      {error && <p className="status-error">{error}</p>}
 
-      <div className="space-y-4">
+      <div className="section-card space-y-5">
         <div>
           <label className="block text-xs font-semibold text-slate-400 mb-1">
             World name
           </label>
           <input
-            className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+            className="input-field"
             value={world.name}
             onChange={(e) =>
               setWorld((prev) => (prev ? { ...prev, name: e.target.value } : prev))
@@ -77,7 +74,7 @@ export function WorldOverviewPage() {
             Game system
           </label>
           <input
-            className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+            className="input-field"
             value={world.game_system}
             onChange={(e) =>
               setWorld((prev) =>
@@ -93,7 +90,7 @@ export function WorldOverviewPage() {
           </label>
           <textarea
             rows={5}
-            className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+            className="input-field"
             placeholder="Short pitch, themes, vibes..."
             value={world.description}
             onChange={(e) =>
@@ -107,7 +104,7 @@ export function WorldOverviewPage() {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-4 py-2 rounded bg-sky-600 text-sm disabled:opacity-50"
+          className="primary-button self-start"
         >
           {saving ? "Saving..." : "Save changes"}
         </button>
