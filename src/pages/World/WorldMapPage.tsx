@@ -5,9 +5,11 @@ import {
   getWorldMap,
   saveWorldMap,
   type MapCity,
+  type MapLocationKind,
 } from "../../api/worldMap";
 import { getErrorMessage } from "../../api/client";
-import { CityMapEditor } from "../../components/CityMapEditor";
+import { CityMapEditor, type CityMapApproach } from "../../components/CityMapEditor";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useCloseGuard } from "../../hooks/useCloseGuard";
 import {
   settlementIcons,
@@ -36,7 +38,6 @@ import {
 import {
   Biome,
   BiomeToolMode,
-  ClimateTarget,
   CompiledRenders,
   MapStateExtended,
   NetworkAnchor,
@@ -61,9 +62,20 @@ import {
   normalizeLayer,
   smoothLayer,
 } from "./map/generation";
+import {
+  normalizeFreehandRoad,
+  routeRoad,
+  type RoadRouteResult,
+} from "./map/roads";
 
 const iconCache = new Map<string, Promise<HTMLImageElement>>();
 const MAX_COMPILED_PIXELS = 12_000_000;
+
+type MapConfirmation =
+  | { kind: "regenerate" }
+  | { kind: "resize" }
+  | { kind: "delete-location"; locationId: string }
+  | { kind: "delete-road"; roadId: string; dependentCount: number };
 
 function canvasPixelRatio(width: number, height: number, maximum = 2) {
   const requested = Math.min(maximum, Math.max(1, window.devicePixelRatio || 1));
@@ -120,6 +132,7 @@ function applyNoiseOverlay(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
+  seed: number,
   alpha = 0.1
 ) {
   const noiseCanvas = document.createElement("canvas");
@@ -129,7 +142,8 @@ function applyNoiseOverlay(
   if (!nctx) return;
   const image = nctx.createImageData(noiseCanvas.width, noiseCanvas.height);
   for (let i = 0; i < image.data.length; i += 4) {
-    const v = Math.floor(Math.random() * 255);
+    const pixel = i / 4;
+    const v = Math.floor(pseudoRandom(pixel % noiseCanvas.width, Math.floor(pixel / noiseCanvas.width), seed + 9187) * 255);
     image.data[i] = v;
     image.data[i + 1] = v;
     image.data[i + 2] = v;
@@ -177,6 +191,13 @@ function cityTier(population: number): keyof typeof settlementIcons {
   if (population > 60000) return "town";
   if (population > 12000) return "village";
   return "hamlet";
+}
+
+function locationIcon(city: MapCity) {
+  if (city.kind === "port") return settlementIcons.port;
+  if (city.kind === "fortress") return settlementIcons.fort;
+  if (city.kind === "ruin") return settlementIcons.ruin;
+  return settlementIcons[cityTier(city.population)];
 }
 
 function terrainIconForBiome(biome: Biome): string | null {
@@ -248,9 +269,7 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
   // Compiled maps are cartographic images, not editor grids. Boundary paths
   // above provide the landmass definition without exposing source tiles.
 
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(224,196,128,0.9)";
-  map.roads.forEach((road) => {
+  const strokeRoads = (stroke: string, width: number) => map.roads.forEach((road) => {
     if (!road.points.length) return;
     ctx.beginPath();
     road.points.forEach((point, index) => {
@@ -259,8 +278,14 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
       if (index === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
+    ctx.lineWidth = width;
+    ctx.strokeStyle = stroke;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     ctx.stroke();
   });
+  strokeRoads("rgba(45,38,28,0.88)", Math.max(3, cellSize * 0.24));
+  strokeRoads("rgba(230,205,154,0.95)", Math.max(1.4, cellSize * 0.12));
 
   const iconPromises: Promise<void>[] = [];
   const baseStep = Math.max(3, Math.floor(Math.min(map.width, map.height) / 9));
@@ -298,9 +323,9 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
     y += baseStep;
   }
 
+  const cityLabels: Array<{ name: string; x: number; y: number; size: number }> = [];
   map.cities.forEach((city) => {
-    const tier = cityTier(city.population);
-    const iconUrl = settlementIcons[tier];
+    const iconUrl = locationIcon(city);
     const px = city.x * map.width * cellSize;
     const py = city.y * map.height * cellSize;
     const size = Math.max(18, cellSize * 1.1);
@@ -309,25 +334,33 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
         if (img.naturalWidth) ctx.drawImage(img, px - size / 2, py - size / 2, size, size);
       })
     );
-    ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.font = `${Math.max(11, cellSize * 0.4)}px 'Space Grotesk', sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillText(city.name, px, py - size * 0.75);
-    ctx.restore();
+    cityLabels.push({ name: city.name, x: px, y: py, size });
   });
 
   await Promise.all(iconPromises);
+  cityLabels.forEach((label) => {
+    ctx.save();
+    ctx.font = `600 ${Math.max(11, cellSize * 0.4)}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.lineWidth = Math.max(2, cellSize * 0.1);
+    ctx.strokeStyle = "rgba(238,225,196,0.9)";
+    ctx.strokeText(label.name, label.x, label.y - label.size * 0.72);
+    ctx.fillStyle = "rgba(32,39,29,0.96)";
+    ctx.fillText(label.name, label.x, label.y - label.size * 0.72);
+    ctx.restore();
+  });
   applyFantasyOverlay(ctx, width, height);
-  applyNoiseOverlay(ctx, width, height, 0.08);
+  applyNoiseOverlay(ctx, width, height, map.seed, 0.08);
   return canvas.toDataURL("image/png");
 }
 
-async function drawCompiledIso(map: MapStateExtended): Promise<string> {
-  const tileWidth = Math.max(8, Math.floor(1800 / (map.width + map.height)));
-  const tileHeight = tileWidth / 2;
-  const logicalWidth = Math.max(960, Math.floor((tileWidth * (map.width + map.height)) / 2 + 160));
-  const logicalHeight = Math.max(720, Math.floor((tileHeight * (map.width + map.height)) / 2 + 160));
+async function drawCompiledIso(map: MapStateExtended, topDownDataUrl: string): Promise<string> {
+  const source = await loadIcon(topDownDataUrl);
+  if (!source.naturalWidth || !source.naturalHeight) return "";
+  const diagonal = Math.ceil(Math.hypot(source.naturalWidth, source.naturalHeight));
+  const logicalWidth = Math.max(960, diagonal + 140);
+  const logicalHeight = Math.max(720, Math.ceil(diagonal * 0.58) + 180);
   const canvas = document.createElement("canvas");
   const pixelRatio = canvasPixelRatio(logicalWidth, logicalHeight);
   canvas.width = Math.floor(logicalWidth * pixelRatio);
@@ -342,118 +375,33 @@ async function drawCompiledIso(map: MapStateExtended): Promise<string> {
   const width = logicalWidth;
   const height = logicalHeight;
 
-  ctx.fillStyle = "#0a0b0d";
+  ctx.fillStyle = "#07130d";
   ctx.fillRect(0, 0, width, height);
-
-  const originX = width / 2;
-  const originY = height / 2 - tileHeight / 2;
-  const sumCenter = (map.width - 1 + map.height - 1) / 2;
-
-  for (let y = 0; y < map.height; y += 1) {
-    for (let x = 0; x < map.width; x += 1) {
-      const idx = y * map.width + x;
-      const biome = computeBiome(map, idx);
-      const color = stylizeColor(BIOME_COLORS[biome]);
-      const isoX = (x + y - sumCenter) * (tileWidth / 2) + originX;
-      const isoY = (y - x) * (tileHeight / 2) + originY;
-      ctx.beginPath();
-      ctx.moveTo(isoX, isoY);
-      ctx.lineTo(isoX + tileWidth / 2, isoY + tileHeight / 2);
-      ctx.lineTo(isoX, isoY + tileHeight);
-      ctx.lineTo(isoX - tileWidth / 2, isoY + tileHeight / 2);
-      ctx.closePath();
-      ctx.fillStyle = color;
-      ctx.fill();
-      ctx.strokeStyle = "rgba(8,25,19,0.28)";
-      ctx.stroke();
-    }
-  }
-
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(224,196,128,0.85)";
-  map.roads.forEach((road) => {
-    if (!road.points.length) return;
-    ctx.beginPath();
-    road.points.forEach((point, index) => {
-      const gx = point.x * map.width - 0.5;
-      const gy = point.y * map.height - 0.5;
-      const px = ((gx + gy - sumCenter) * (tileWidth / 2)) + originX;
-      const py = (gy - gx) * (tileHeight / 2) + originY + tileHeight / 2;
-      if (index === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-    ctx.stroke();
-  });
-
-  const iconPromises: Promise<void>[] = [];
-  const vegetationStep = Math.max(3, Math.floor(Math.min(map.width, map.height) / 9));
-  for (let y = vegetationStep / 2; y < map.height; y += vegetationStep) {
-    for (let x = vegetationStep / 2; x < map.width; x += vegetationStep) {
-      const idx = Math.min(map.height - 1, Math.floor(y)) * map.width + Math.min(map.width - 1, Math.floor(x));
-      const biome = computeBiome(map, idx);
-      const vegLevel = map.vegetation[idx];
-      const vegUrl = vegetationIcons[biome];
-      const terrainUrl = terrainIconForBiome(biome);
-      const densityFactor = lerp(0.5, 1.6, 1 - vegLevel);
-      const jitterX = (pseudoRandom(x, y, map.seed + 404) - 0.5) * tileWidth * 0.5;
-      const jitterY = (pseudoRandom(x, y, map.seed + 505) - 0.5) * tileHeight * 0.8;
-      const gx = x + jitterX / tileWidth;
-      const gy = y + jitterY / tileHeight;
-      const isoX = (gx + gy - sumCenter) * (tileWidth / 2) + originX;
-      const isoY = (gy - gx) * (tileHeight / 2) + originY + tileHeight / 2;
-      const vegSize = Math.max(12, tileWidth * 0.9);
-      if (vegUrl && pseudoRandom(x, y, map.seed + 1516) < vegLevel + 0.2) {
-        iconPromises.push(
-          loadIcon(vegUrl).then((img) => {
-            if (img.naturalWidth) ctx.drawImage(img, isoX - vegSize / 2, isoY - vegSize / 2, vegSize, vegSize);
-          })
-        );
-      }
-      if (terrainUrl && pseudoRandom(x, y, map.seed + 909) > 0.72) {
-        const size = Math.max(16, tileWidth * 1.1);
-        iconPromises.push(
-          loadIcon(terrainUrl).then((img) => {
-            if (img.naturalWidth) ctx.drawImage(img, isoX - size / 2, isoY - size / 2, size, size);
-          })
-        );
-      }
-      x += Math.max(2, Math.round(vegetationStep * densityFactor)) - vegetationStep;
-    }
-  }
-
-  map.cities.forEach((city) => {
-    const tier = cityTier(city.population);
-    const iconUrl = settlementIcons[tier];
-    const gx = city.x * map.width - 0.5;
-    const gy = city.y * map.height - 0.5;
-    const px = ((gx + gy - sumCenter) * (tileWidth / 2)) + originX;
-    const py = (gy - gx) * (tileHeight / 2) + originY + tileHeight / 2;
-    const size = Math.max(22, tileWidth * 1.35);
-    iconPromises.push(
-      loadIcon(iconUrl).then((img) => {
-        if (img.naturalWidth) ctx.drawImage(img, px - size / 2, py - size / 2, size, size);
-      })
-    );
-    ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.font = `${Math.max(12, tileWidth * 0.45)}px 'Space Grotesk', sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillText(city.name, px, py - size * 0.85);
-    ctx.restore();
-  });
-
-  await Promise.all(iconPromises);
+  ctx.save();
+  ctx.translate(width / 2, height / 2 - 12);
+  ctx.scale(1, 0.56);
+  ctx.rotate(Math.PI / 4);
+  const sourceScale = Math.min(
+    (width - 160) / diagonal,
+    (height - 170) / (diagonal * 0.56)
+  );
+  ctx.scale(sourceScale, sourceScale);
+  ctx.shadowColor = "rgba(0,0,0,0.72)";
+  ctx.shadowBlur = 38 / Math.max(sourceScale, 0.1);
+  ctx.shadowOffsetY = 28 / Math.max(sourceScale, 0.1);
+  ctx.drawImage(source, -source.naturalWidth / 2, -source.naturalHeight / 2);
+  ctx.restore();
   applyFantasyOverlay(ctx, width, height);
-  applyNoiseOverlay(ctx, width, height, 0.08);
+  applyNoiseOverlay(ctx, width, height, map.seed + 1, 0.08);
   return canvas.toDataURL("image/png");
 }
 
 async function generateCompiledRenders(map: MapStateExtended): Promise<CompiledRenders> {
   const extended = ensureExtendedMap(map);
-  const [grid, iso] = await Promise.all([
-    drawCompiledGrid(extended),
-    drawCompiledIso(extended),
-  ]);
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  const grid = await drawCompiledGrid(extended);
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  const iso = await drawCompiledIso(extended, grid);
   return { grid, iso };
 }
 
@@ -470,7 +418,8 @@ function drawIsometricMap(
     relief?: { min: number; max: number };
     temperature?: { min: number; max: number };
     vegetation?: { min: number; max: number };
-  }
+  },
+  freehandDraft: readonly PixelPoint[] = []
 ) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
@@ -527,7 +476,7 @@ function drawIsometricMap(
     }
   }
 
-  const drawRoad = (points: PixelPoint[], stroke: string) => {
+  const drawRoad = (points: readonly PixelPoint[], stroke: string) => {
     if (points.length === 0) return;
     ctx.beginPath();
     const first = points[0];
@@ -550,6 +499,12 @@ function drawIsometricMap(
   };
 
   map.roads.forEach((road) => drawRoad(road.points, "rgba(224,196,128,0.85)"));
+  if (freehandDraft.length > 1) {
+    ctx.save();
+    ctx.setLineDash([6, 5]);
+    drawRoad(freehandDraft, "rgba(255,214,142,0.95)");
+    ctx.restore();
+  }
   if (roadDraftStart) {
     drawRoad([roadDraftStart], "rgba(255,198,109,0.8)");
   }
@@ -583,7 +538,8 @@ function drawGridMap(
     relief?: { min: number; max: number };
     temperature?: { min: number; max: number };
     vegetation?: { min: number; max: number };
-  }
+  },
+  freehandDraft: readonly PixelPoint[] = []
 ) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
@@ -654,6 +610,21 @@ function drawGridMap(
     });
     ctx.stroke();
   });
+  if (freehandDraft.length > 1) {
+    ctx.save();
+    ctx.setLineDash([6, 5]);
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = "rgba(255,214,142,0.95)";
+    ctx.beginPath();
+    freehandDraft.forEach((point, index) => {
+      const px = point.x * map.width * cellSize + pan.x;
+      const py = point.y * map.height * cellSize + pan.y;
+      if (index === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+    ctx.restore();
+  }
   if (roadDraftStart) {
     ctx.fillStyle = "rgba(255,198,109,0.8)";
     ctx.beginPath();
@@ -883,187 +854,6 @@ function vegetationOverlayColor(value: number, range: { min: number; max: number
   return `hsla(${hue}, ${sat}%, ${light}%, 0.95)`;
 }
 
-type PathNode = { x: number; y: number; g: number; score: number };
-
-function pushPathNode(heap: PathNode[], node: PathNode) {
-  heap.push(node);
-  let index = heap.length - 1;
-  while (index > 0) {
-    const parent = Math.floor((index - 1) / 2);
-    if (heap[parent].score <= node.score) break;
-    heap[index] = heap[parent];
-    index = parent;
-  }
-  heap[index] = node;
-}
-
-function popPathNode(heap: PathNode[]) {
-  const first = heap[0];
-  const last = heap.pop();
-  if (!first || !last || heap.length === 0) return first;
-  let index = 0;
-  while (true) {
-    const left = index * 2 + 1;
-    const right = left + 1;
-    if (left >= heap.length) break;
-    const child = right < heap.length && heap[right].score < heap[left].score ? right : left;
-    if (heap[child].score >= last.score) break;
-    heap[index] = heap[child];
-    index = child;
-  }
-  heap[index] = last;
-  return first;
-}
-
-function buildRoadBetweenAnchors(
-  map: MapStateExtended,
-  from: PixelPoint,
-  to: PixelPoint
-) {
-  const width = map.width;
-  const height = map.height;
-  const startX = clamp(from.x, 0.5 / width, 1 - 0.5 / width) * width - 0.5;
-  const startY = clamp(from.y, 0.5 / height, 1 - 0.5 / height) * height - 0.5;
-  const endX = clamp(to.x, 0.5 / width, 1 - 0.5 / width) * width - 0.5;
-  const endY = clamp(to.y, 0.5 / height, 1 - 0.5 / height) * height - 0.5;
-
-  const start = { x: Math.round(startX), y: Math.round(startY) };
-  const goal = { x: Math.round(endX), y: Math.round(endY) };
-
-  const maxBridgeCells = 2;
-
-  const gScore = new Map<string, number>();
-  const cameFrom = new Map<string, { x: number; y: number }>();
-  const waterRun = new Map<string, number>();
-
-  const key = (x: number, y: number) => `${x},${y}`;
-  const heuristic = (x: number, y: number) => Math.hypot(goal.x - x, goal.y - y);
-  const reliefAt = (x: number, y: number) => map.relief[y * width + x];
-  const vegetationAt = (x: number, y: number) => map.vegetation[y * width + x] ?? 0;
-
-  const open: PathNode[] = [];
-  gScore.set(key(start.x, start.y), 0);
-  waterRun.set(key(start.x, start.y), isWaterCell(map, start.x, start.y) ? 1 : 0);
-  pushPathNode(open, { ...start, g: 0, score: heuristic(start.x, start.y) * 1.35 });
-
-  while (open.length > 0) {
-    // A binary heap keeps path generation responsive on the largest map size.
-    const currentBest = popPathNode(open)!;
-    const currentKey = key(currentBest.x, currentBest.y);
-    if (currentBest.g > (gScore.get(currentKey) ?? Infinity)) continue;
-
-    if (currentBest.x === goal.x && currentBest.y === goal.y) {
-      // Reconstruct path.
-      const path: PixelPoint[] = [];
-      let iterKey: string | undefined = currentKey;
-      while (iterKey) {
-        const [ix, iy] = iterKey.split(",").map(Number);
-        path.push({
-          x: (ix + 0.5) / width,
-          y: (iy + 0.5) / height,
-        });
-        const prev = cameFrom.get(iterKey);
-        iterKey = prev ? key(prev.x, prev.y) : undefined;
-      }
-      return path.reverse();
-    }
-
-    const currentRelief = reliefAt(currentBest.x, currentBest.y);
-    const currentWaterRun = waterRun.get(currentKey) ?? 0;
-
-    for (let dy = -1; dy <= 1; dy += 1) {
-      for (let dx = -1; dx <= 1; dx += 1) {
-        if (dx === 0 && dy === 0) continue;
-        const nx = currentBest.x + dx;
-        const ny = currentBest.y + dy;
-        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-
-        const diagonal = dx !== 0 && dy !== 0;
-        const stepBase = diagonal ? Math.SQRT2 : 1;
-        const nextRelief = reliefAt(nx, ny);
-        const slopeDiff = Math.abs(nextRelief - currentRelief);
-        const vegetation = vegetationAt(nx, ny);
-
-        const nextIsWater = isWaterCell(map, nx, ny);
-        const nextWaterRun = nextIsWater ? currentWaterRun + 1 : 0;
-        if (nextIsWater && nextWaterRun > maxBridgeCells) continue;
-
-        // Grade is direction-neutral: ascents and descents both avoid steep cells.
-        const altitudePenalty = Math.max(0, nextRelief - 0.64) ** 2 * 95;
-        const slopePenalty = slopeDiff * slopeDiff * 165 + Math.max(0, slopeDiff - 0.035) * 24;
-        const vegetationPenalty = vegetation * 1.25;
-        // Water is treated as an exceptional bridge choice: only a dramatically
-        // shorter route can outweigh it, and continuous crossings remain capped.
-        const waterPenalty = nextIsWater ? 900 * nextWaterRun : 0;
-
-        const tentativeG =
-          (gScore.get(currentKey) ?? Infinity) +
-          stepBase +
-          slopePenalty +
-          altitudePenalty +
-          vegetationPenalty +
-          waterPenalty;
-
-        const neighborKey = key(nx, ny);
-        if (tentativeG < (gScore.get(neighborKey) ?? Infinity)) {
-          cameFrom.set(neighborKey, { x: currentBest.x, y: currentBest.y });
-          gScore.set(neighborKey, tentativeG);
-          waterRun.set(neighborKey, nextWaterRun);
-          pushPathNode(open, {
-            x: nx,
-            y: ny,
-            g: tentativeG,
-            score: tentativeG + heuristic(nx, ny) * 1.35,
-          });
-        }
-      }
-    }
-  }
-
-  // Fallback: straight line if no path found.
-  return [
-    { x: clamp(from.x, 0, 0.9999), y: clamp(from.y, 0, 0.9999) },
-    { x: clamp(to.x, 0, 0.9999), y: clamp(to.y, 0, 0.9999) },
-  ];
-}
-
-function findAttachmentTarget(map: MapStateExtended, city: MapCity): NetworkAnchor | null {
-  let best: NetworkAnchor | null = null;
-  let bestDist = Infinity;
-  map.cities.forEach((existing) => {
-    const d = distance(
-      { x: existing.x, y: existing.y },
-      { x: city.x, y: city.y }
-    );
-    if (d < bestDist) {
-      bestDist = d;
-      best = {
-        x: existing.x,
-        y: existing.y,
-        label: existing.name,
-        targetType: "city",
-        targetId: existing.id,
-      };
-    }
-  });
-  map.roads.forEach((road) => {
-    for (let index = 1; index < road.points.length; index += 1) {
-      const point = closestPointOnSegment(city, road.points[index - 1], road.points[index]);
-      const d = distance(point, city);
-      if (d < bestDist) {
-        bestDist = d;
-        best = {
-          ...point,
-          label: "Road node",
-          targetType: "road",
-          targetId: road.id,
-        };
-      }
-    }
-  });
-  return best;
-}
-
 function findNearestCity(
   map: MapStateExtended,
   point: PixelPoint,
@@ -1084,6 +874,7 @@ function findNearestCity(
 function addCityToMap(
   map: MapStateExtended,
   name: string,
+  kind: MapLocationKind,
   xRatio: number,
   yRatio: number
 ): { map: MapStateExtended; city: MapCity | null } {
@@ -1114,34 +905,19 @@ function addCityToMap(
   const city: MapCity = {
     id: randomId(),
     name: name.trim().slice(0, 120),
+    kind,
     x: (gridX + 0.5) / width,
     y: (gridY + 0.5) / height,
     elevation,
-    population: Math.floor(500 + Math.random() * 4500),
+    population: kind === "settlement" || kind === "port"
+      ? Math.floor(500 + pseudoRandom(gridX, gridY, map.seed + map.cities.length * 17) * 4500)
+      : 0,
   };
-  let roads = map.roads.map((road) => ({
-    ...road,
-    points: road.points.map((point) => ({ ...point })),
-  }));
-  const target = findAttachmentTarget(map, city);
-  if (target && distance(target, city) <= 0.28) {
-    const path = buildRoadBetweenAnchors(map, target, { x: city.x, y: city.y });
-    const roadId = randomId();
-    roads = [
-      ...roads,
-      {
-        id: roadId,
-        from_city_id: target.targetId ?? `${roadId}-start`,
-        to_city_id: city.id,
-        points: path,
-      },
-    ];
-  }
   return {
     map: {
       ...invalidateCompiledMap(map),
       cities: [...map.cities, city],
-      roads,
+      roads: map.roads,
     },
     city,
   };
@@ -1189,23 +965,29 @@ function snapToNetwork(map: MapStateExtended, point: PixelPoint): NetworkAnchor 
 function addManualRoad(
   map: MapStateExtended,
   start: NetworkAnchor,
-  end: NetworkAnchor
-): MapStateExtended {
-  if (distance(start, end) < 0.5 / Math.max(map.width, map.height)) return map;
-  const path = buildRoadBetweenAnchors(map, start, end);
-  if (path.length < 2) return map;
+  end: NetworkAnchor,
+  options: { naturalVariation: number; maxBridgeCells: number }
+): { map: MapStateExtended; result: RoadRouteResult } {
+  const result = routeRoad(map, start, end, {
+    ...options,
+    seed: map.seed + map.roads.length * 7_919,
+  });
+  if (result.usedFallback || result.points.length < 2) return { map, result };
   const roadId = randomId();
   return {
-    ...invalidateCompiledMap(map),
-    roads: [
-      ...map.roads,
-      {
-        id: roadId,
-        from_city_id: start.targetId ?? roadId,
-        to_city_id: end.targetId ?? `${roadId}-end`,
-        points: path,
-      },
-    ],
+    result,
+    map: {
+      ...invalidateCompiledMap(map),
+      roads: [
+        ...map.roads,
+        {
+          id: roadId,
+          from_city_id: start.targetId ?? roadId,
+          to_city_id: end.targetId ?? `${roadId}-end`,
+          points: result.points,
+        },
+      ],
+    },
   };
 }
 
@@ -1243,7 +1025,6 @@ export function WorldMapPage() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [selectedBiome, setSelectedBiome] = useState<Biome>("plains");
   const [biomeToolMode, setBiomeToolMode] = useState<BiomeToolMode>("palette");
-  const [climateTarget, setClimateTarget] = useState<ClimateTarget>("moisture");
   const [climateDirection, setClimateDirection] = useState<"raise" | "lower">("raise");
   const [brushSize, setBrushSize] = useState(0.05);
   const [selectedCity, setSelectedCity] = useState<MapCity | null>(null);
@@ -1253,9 +1034,19 @@ export function WorldMapPage() {
   const [isPanning, setIsPanning] = useState(false);
   const [isBrushing, setIsBrushing] = useState(false);
   const [roadDraftStart, setRoadDraftStart] = useState<NetworkAnchor | null>(null);
+  const [roadToolMode, setRoadToolMode] = useState<"auto" | "freehand" | "select">("auto");
+  const [freehandDraft, setFreehandDraft] = useState<PixelPoint[]>([]);
+  const freehandDraftRef = useRef<PixelPoint[]>([]);
+  const freehandActiveRef = useRef(false);
+  const [roadNaturalness, setRoadNaturalness] = useState(0.22);
+  const [allowBridges, setAllowBridges] = useState(true);
+  const [roadReport, setRoadReport] = useState<string | null>(null);
+  const [roadFromId, setRoadFromId] = useState("");
+  const [roadToId, setRoadToId] = useState("");
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("biomes");
   const [desiredSize, setDesiredSize] = useState(MAP_DEFAULT_SIZE);
   const [saving, setSaving] = useState(false);
+  const [compiling, setCompiling] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [cityEditorDirty, setCityEditorDirty] = useState(false);
   const [previewWarning, setPreviewWarning] = useState<string | null>(null);
@@ -1266,10 +1057,16 @@ export function WorldMapPage() {
   const [locationAction, setLocationAction] = useState<PrimaryAction>("navigate");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [draftCityName, setDraftCityName] = useState("New City");
+  const [draftLocationKind, setDraftLocationKind] = useState<MapLocationKind>("settlement");
   const [selectedCityName, setSelectedCityName] = useState("");
   const [selectedCityPopulation, setSelectedCityPopulation] = useState("");
+  const [selectedLocationKind, setSelectedLocationKind] = useState<MapLocationKind>("settlement");
   const [compiledView, setCompiledView] = useState(true);
   const [cityEditorSaving, setCityEditorSaving] = useState(false);
+  const [undoStack, setUndoStack] = useState<MapStateExtended[]>([]);
+  const [redoStack, setRedoStack] = useState<MapStateExtended[]>([]);
+  const [confirmation, setConfirmation] = useState<MapConfirmation | null>(null);
+  const [navigationConfirmationOpen, setNavigationConfirmationOpen] = useState(false);
   const compiledPreferenceRef = useRef(false);
   const revisionRef = useRef(0);
   const activeWorldIdRef = useRef(worldId);
@@ -1287,18 +1084,54 @@ export function WorldMapPage() {
     setPreviewWarning(null);
   }, []);
 
-  const mutationPending = saving || cityEditorSaving;
+  const rememberSnapshot = useCallback((snapshot: MapStateExtended) => {
+    setUndoStack((current) => [...current.slice(-11), snapshot]);
+    setRedoStack([]);
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    setUndoStack((current) => {
+      const previous = current[current.length - 1];
+      if (!previous) return current;
+      setMapState((active) => {
+        if (active) setRedoStack((future) => [...future.slice(-11), active]);
+        return previous;
+      });
+      revisionRef.current += 1;
+      setDirty(true);
+      setError(null);
+      setStatusMessage("Undid the last map edit.");
+      return current.slice(0, -1);
+    });
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    setRedoStack((current) => {
+      const next = current[current.length - 1];
+      if (!next) return current;
+      setMapState((active) => {
+        if (active) setUndoStack((history) => [...history.slice(-11), active]);
+        return next;
+      });
+      revisionRef.current += 1;
+      setDirty(true);
+      setError(null);
+      setStatusMessage("Redid the map edit.");
+      return current.slice(0, -1);
+    });
+  }, []);
+
+  const mutationPending = saving || compiling || cityEditorSaving;
   const navigationBlocked = dirty || cityEditorDirty || mutationPending;
   const blocker = useBlocker(navigationBlocked);
   useEffect(() => {
     if (blocker.state !== "blocked") return;
     if (mutationPending) {
-      window.alert("A map save is still in progress. Wait for it to finish before leaving this page.");
+      setStatusMessage("A map save is still in progress. Wait for it to finish before leaving.");
       blocker.reset();
       return;
     }
-    if (window.confirm("Discard unsaved world or city map changes and leave this page?")) blocker.proceed();
-    else blocker.reset();
+    setNavigationConfirmationOpen(true);
   }, [blocker, mutationPending]);
 
   useCloseGuard({
@@ -1312,16 +1145,21 @@ export function WorldMapPage() {
     if (toolGroup === "biome") {
       if (biomeToolMode === "palette") return "paint-biome";
       const direction = climateDirection === "raise" ? "raise" : "lower";
-      return `${direction}-${climateTarget}` as PrimaryAction;
+      return `${direction}-${biomeToolMode}` as PrimaryAction;
     }
     if (toolGroup === "relief") {
       return reliefAction === "raise" ? "raise-relief" : "lower-relief";
+    }
+    if (toolGroup === "roads") {
+      if (roadToolMode === "auto") return "add-road";
+      if (roadToolMode === "freehand") return "draw-road";
+      return "navigate";
     }
       if (toolGroup === "locations") {
         return locationAction;
       }
       return "navigate";
-    }, [toolGroup, biomeToolMode, climateDirection, climateTarget, reliefAction, locationAction]);
+    }, [toolGroup, biomeToolMode, climateDirection, reliefAction, roadToolMode, locationAction]);
 
   const primaryAction = compiledView ? "navigate" : derivedPrimaryAction;
 
@@ -1341,7 +1179,11 @@ export function WorldMapPage() {
   useEffect(() => {
     if (toolGroup !== "locations") {
       setLocationAction("navigate");
+    }
+    if (toolGroup !== "roads") {
       setRoadDraftStart(null);
+      freehandDraftRef.current = [];
+      setFreehandDraft([]);
     }
   }, [toolGroup]);
 
@@ -1372,10 +1214,10 @@ export function WorldMapPage() {
   }, [mapState]);
 
   useEffect(() => {
-    if (locationAction !== "add-road") {
+    if (roadToolMode !== "auto" || toolGroup !== "roads") {
       setRoadDraftStart(null);
     }
-  }, [locationAction]);
+  }, [roadToolMode, toolGroup]);
 
   useEffect(() => {
     const node = viewportRef.current;
@@ -1407,6 +1249,7 @@ export function WorldMapPage() {
     let cancelled = false;
     activeWorldIdRef.current = worldId;
     setSaving(false);
+    setCompiling(false);
     if (!worldId) {
       setMapState(null);
       setError("No world was selected.");
@@ -1424,6 +1267,10 @@ export function WorldMapPage() {
     setDirty(false);
     setCityEditorDirty(false);
     setCityEditorSaving(false);
+    setUndoStack([]);
+    setRedoStack([]);
+    setFreehandDraft([]);
+    freehandDraftRef.current = [];
     revisionRef.current = 0;
     getWorldMap(worldId)
       .then((map) => {
@@ -1475,7 +1322,8 @@ export function WorldMapPage() {
         selectedCity?.id,
         roadDraftStart ?? undefined,
         overlayMode,
-        overlayRanges
+        overlayRanges,
+        freehandDraft
       );
     } else {
       drawGridMap(
@@ -1487,7 +1335,8 @@ export function WorldMapPage() {
         selectedCity?.id,
         roadDraftStart ?? undefined,
         overlayMode,
-        overlayRanges
+        overlayRanges,
+        freehandDraft
       );
     }
   }, [
@@ -1497,6 +1346,7 @@ export function WorldMapPage() {
     viewportSize,
       selectedCity,
       roadDraftStart,
+      freehandDraft,
       viewMode,
       overlayMode,
       compiledView,
@@ -1525,7 +1375,7 @@ export function WorldMapPage() {
     [panOffset.x, panOffset.y, zoom]
   );
   const cityExternalConnections = useMemo(() => {
-    if (!mapState || !cityEditorCity) return [];
+    if (!mapState || !cityEditorCity) return [] as CityMapApproach[];
     return mapState.roads.flatMap((road) => {
       if (road.points.length < 2) return [];
       const first = road.points[0];
@@ -1534,22 +1384,18 @@ export function WorldMapPage() {
       const cityAtEnd = road.to_city_id === cityEditorCity.id || distance(last, cityEditorCity) < 0.025;
       if (cityAtStart) {
         const next = road.points[1];
-        return [Math.atan2(next.y - first.y, next.x - first.x)];
+        return [{ worldRoadId: road.id, angle: Math.atan2(next.y - first.y, next.x - first.x), roadClass: "arterial" as const }];
       }
       if (cityAtEnd) {
         const previous = road.points[road.points.length - 2];
-        return [Math.atan2(previous.y - last.y, previous.x - last.x)];
+        return [{ worldRoadId: road.id, angle: Math.atan2(previous.y - last.y, previous.x - last.x), roadClass: "arterial" as const }];
       }
       return [];
     });
   }, [mapState, cityEditorCity]);
 
-  const handleGenerateMap = () => {
-    if (
-      mapState &&
-      (mapState.cities.length > 0 || mapState.roads.length > 0 || dirty) &&
-      !window.confirm("Generate new terrain? This replaces all terrain, cities, and roads on the current map.")
-    ) return;
+  const generateMap = () => {
+    if (mapState) rememberSnapshot(mapState);
     markEdited();
     setMapState(
       generateProceduralMap(
@@ -1566,7 +1412,16 @@ export function WorldMapPage() {
     setStatusMessage("Generated new terrain.");
   };
 
+  const handleGenerateMap = () => {
+    if (mapState && (mapState.cities.length > 0 || mapState.roads.length > 0 || dirty)) {
+      setConfirmation({ kind: "regenerate" });
+      return;
+    }
+    generateMap();
+  };
+
   const handleNaturalizeRelief = () => {
+    if (mapState) rememberSnapshot(mapState);
     markEdited();
     setMapState((prev) =>
       prev
@@ -1580,6 +1435,7 @@ export function WorldMapPage() {
   };
 
   const handleNormalizeLayer = (layer: "moisture" | "temperature" | "vegetation") => {
+    if (mapState) rememberSnapshot(mapState);
     markEdited();
     setMapState((prev) =>
       prev
@@ -1611,36 +1467,9 @@ export function WorldMapPage() {
       if (isActiveWorld() && revisionRef.current === saveRevision) {
         setMapState(savedSource);
         setDirty(false);
-      }
-      if (isActiveWorld()) setStatusMessage("Map saved. Rendering previews…");
-      try {
-        const compiled = await generateCompiledRenders(savedSource);
-        if (!compiled.grid || !compiled.iso) throw new Error("The renderer returned an empty image.");
-        const payload = {
-          ...savedSource,
-          compiled_grid: compiled.grid,
-          compiled_iso: compiled.iso,
-          compiled_updated_at: Date.now(),
-        };
-        const savedWithPreviews = ensureExtendedMap(await saveWorldMap(saveWorldId, payload));
-        if (isActiveWorld() && revisionRef.current === saveRevision) {
-          setMapState(savedWithPreviews);
-          setDirty(false);
-          setStatusMessage("Map and previews saved.");
-        } else if (isActiveWorld()) {
-          setStatusMessage("Saved an earlier snapshot; newer edits are still unsaved.");
-        }
-      } catch (previewError) {
-        if (isActiveWorld()) {
-          setPreviewWarning(
-            `${getErrorMessage(previewError, "Preview rendering failed.")} Your editable map data was saved safely.`
-          );
-          setStatusMessage(
-            revisionRef.current === saveRevision
-              ? "Map saved without refreshed previews."
-              : "Saved an earlier snapshot; newer edits are still unsaved."
-          );
-        }
+        setStatusMessage("Map saved.");
+      } else if (isActiveWorld()) {
+        setStatusMessage("Saved an earlier snapshot; newer edits are still unsaved.");
       }
     } catch (e) {
       if (activeWorldIdRef.current === saveWorldId) {
@@ -1651,12 +1480,45 @@ export function WorldMapPage() {
     }
   };
 
-  const handleResizeMap = () => {
-    if (
-      mapState &&
-      (mapState.cities.length > 0 || mapState.roads.length > 0 || dirty) &&
-      !window.confirm(`Rebuild at ${desiredSize} × ${desiredSize}? This replaces all terrain, cities, and roads.`)
-    ) return;
+  const handleCompileMap = async () => {
+    if (!mapState || compiling || saving) return;
+    const compileWorldId = worldId;
+    const snapshot = ensureExtendedMap(mapState);
+    const compileRevision = revisionRef.current;
+    setCompiling(true);
+    setError(null);
+    setPreviewWarning(null);
+    setStatusMessage("Rendering presentation views…");
+    try {
+      const compiled = await generateCompiledRenders(snapshot);
+      if (!compiled.grid || !compiled.iso) throw new Error("The renderer returned an empty image.");
+      if (activeWorldIdRef.current !== compileWorldId || revisionRef.current !== compileRevision) {
+        if (activeWorldIdRef.current !== compileWorldId) return;
+        setPreviewWarning("The source changed while rendering, so the outdated presentation was discarded. Render again when your edits are ready.");
+        return;
+      }
+      revisionRef.current += 1;
+      setMapState((current) => current ? {
+        ...current,
+        compiled_grid: compiled.grid,
+        compiled_iso: compiled.iso,
+        compiled_updated_at: Date.now(),
+      } : current);
+      setDirty(true);
+      setCompiledView(true);
+      compiledPreferenceRef.current = true;
+      setStatusMessage("Presentation rendered. Save the map to keep it.");
+    } catch (compileError) {
+      if (activeWorldIdRef.current === compileWorldId) {
+        setPreviewWarning(getErrorMessage(compileError, "We couldn't render the presentation views."));
+      }
+    } finally {
+      if (activeWorldIdRef.current === compileWorldId) setCompiling(false);
+    }
+  };
+
+  const resizeMap = () => {
+    if (mapState) rememberSnapshot(mapState);
     markEdited();
     const next = generateProceduralMap(
       Date.now(),
@@ -1670,6 +1532,14 @@ export function WorldMapPage() {
     setSelectedCityPopulation("");
     setCityEditorCity(null);
     setStatusMessage(`Rebuilt map at ${desiredSize} × ${desiredSize}.`);
+  };
+
+  const handleResizeMap = () => {
+    if (mapState && (mapState.cities.length > 0 || mapState.roads.length > 0 || dirty)) {
+      setConfirmation({ kind: "resize" });
+      return;
+    }
+    resizeMap();
   };
 
   const screenToMapPoint = useCallback(
@@ -1718,13 +1588,14 @@ export function WorldMapPage() {
   const handleBrush = useCallback(
     (point: PixelPoint | null) => {
       if (!point || !mapState) return;
+      markEdited();
       setMapState((prev) =>
         prev
           ? applyBrushToMap(prev, point, primaryAction, selectedBiome, brushSize)
           : prev
       );
     },
-    [mapState, primaryAction, selectedBiome, brushSize]
+    [mapState, markEdited, primaryAction, selectedBiome, brushSize]
   );
 
   const handleWheel = (event: WheelEvent<HTMLCanvasElement>) => {
@@ -1749,6 +1620,7 @@ export function WorldMapPage() {
           setSelectedCity(nearest);
           setSelectedCityName(nearest.name);
           setSelectedCityPopulation(String(nearest.population));
+          setSelectedLocationKind(nearest.kind ?? "settlement");
           setStatusMessage(`Selected ${nearest.name}`);
         }
       }
@@ -1758,17 +1630,27 @@ export function WorldMapPage() {
     }
     if (isBrushAction) {
       const point = screenToMapPoint(event);
-      if (!point) return;
-      markEdited();
+      if (!point || !mapState) return;
+      rememberSnapshot(mapState);
       handleBrush(point);
       setIsBrushing(true);
+      return;
+    }
+    if (primaryAction === "draw-road") {
+      const point = screenToMapPoint(event);
+      if (!point || !mapState) return;
+      freehandActiveRef.current = true;
+      freehandDraftRef.current = [point];
+      setFreehandDraft([point]);
+      setRoadReport(null);
+      setStatusMessage("Draw the road's course, then release to normalize it.");
       return;
     }
     if (primaryAction === "place-city") {
       const point = screenToMapPoint(event);
       if (point && mapState) {
         const name = draftCityName.trim() || `City ${mapState.cities.length + 1}`;
-        const next = addCityToMap(mapState, name, point.x, point.y);
+        const next = addCityToMap(mapState, name, draftLocationKind, point.x, point.y);
         if (!next.city) {
           setStatusMessage("Choose land or a coast with land within 12 cells.");
           return;
@@ -1777,14 +1659,15 @@ export function WorldMapPage() {
           setStatusMessage("A city already occupies that location.");
           return;
         }
+        rememberSnapshot(mapState);
         markEdited();
         setMapState(next.map);
         setSelectedCity(next.city);
         setSelectedCityName(next.city.name);
         setSelectedCityPopulation(String(next.city.population));
-        setCityEditorCity(next.city);
+        setSelectedLocationKind(next.city.kind ?? "settlement");
         setDraftCityName(`City ${mapState.cities.length + 2}`);
-        setStatusMessage(`Added ${name}`);
+        setStatusMessage(`Added ${name}. Save the world map before opening its city plan.`);
       }
       return;
     }
@@ -1796,15 +1679,25 @@ export function WorldMapPage() {
         setRoadDraftStart(snapped);
         setStatusMessage(`Road anchor: ${snapped.label}`);
       } else {
-        const next = addManualRoad(mapState, roadDraftStart, snapped);
-        if (next === mapState) {
-          setStatusMessage("Choose a different endpoint for this road.");
+        const routed = addManualRoad(mapState, roadDraftStart, snapped, {
+          naturalVariation: roadNaturalness,
+          maxBridgeCells: allowBridges ? 3 : 0,
+        });
+        if (routed.map === mapState) {
+          setRoadReport(routed.result.warnings.join(" ") || "Choose a different endpoint for this road.");
+          setStatusMessage("No safe route was added.");
           return;
         }
+        rememberSnapshot(mapState);
         markEdited();
-        setMapState(next);
+        setMapState(routed.map);
         setRoadDraftStart(null);
-        setStatusMessage("Road segment added.");
+        setRoadReport(
+          `${routed.result.distanceCells.toFixed(0)} cells · max grade ${routed.result.maxGrade.toFixed(2)}${
+            routed.result.bridgeCells ? ` · ${routed.result.bridgeCells} bridge cells` : ""
+          }${routed.result.warnings.length ? ` — ${routed.result.warnings.join(" ")}` : ""}`
+        );
+        setStatusMessage("Terrain-aware road added.");
       }
     }
   };
@@ -1822,23 +1715,124 @@ export function WorldMapPage() {
     }
     if (isBrushing) {
       handleBrush(screenToMapPoint(event));
+      return;
+    }
+    if (freehandActiveRef.current && mapState) {
+      const point = screenToMapPoint(event);
+      if (!point) return;
+      const current = freehandDraftRef.current;
+      const last = current[current.length - 1];
+      if (last && distance(last, point) < 0.25 / Math.max(mapState.width, mapState.height)) return;
+      const next = [...current, point];
+      freehandDraftRef.current = next;
+      setFreehandDraft(next);
     }
   };
 
   const handlePointerUp = (event?: ReactPointerEvent<HTMLCanvasElement>) => {
+    const finishingFreehand = freehandActiveRef.current;
+    if (finishingFreehand) freehandActiveRef.current = false;
     if (event?.currentTarget.hasPointerCapture?.(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     setIsPanning(false);
     setIsBrushing(false);
     lastPanRef.current = null;
+    if (!finishingFreehand || !mapState) return;
+    const raw = freehandDraftRef.current;
+    freehandDraftRef.current = [];
+    setFreehandDraft([]);
+    if (raw.length < 2) {
+      setRoadReport("Draw a longer line to create a road.");
+      return;
+    }
+    const start = snapToNetwork(mapState, raw[0]);
+    const end = snapToNetwork(mapState, raw[raw.length - 1]);
+    const guidedStroke = [start, ...raw.slice(1, -1), end];
+    const result = normalizeFreehandRoad(mapState, guidedStroke, {
+      seed: mapState.seed + mapState.roads.length * 7_919,
+      naturalVariation: roadNaturalness,
+      maxBridgeCells: allowBridges ? 3 : 0,
+      guideCorridorCells: 2.5,
+      guideAttraction: 1.15,
+    });
+    if (result.usedFallback || result.points.length < 2) {
+      setRoadReport(result.warnings.join(" ") || "No terrain-safe road matched that stroke.");
+      setStatusMessage("No safe road was added. Adjust the stroke or bridge policy and try again.");
+      return;
+    }
+    const roadId = randomId();
+    rememberSnapshot(mapState);
+    markEdited();
+    setMapState({
+      ...invalidateCompiledMap(mapState),
+      roads: [...mapState.roads, {
+        id: roadId,
+        from_city_id: start.targetId ?? roadId,
+        to_city_id: end.targetId ?? `${roadId}-end`,
+        points: result.points,
+      }],
+    });
+    setRoadReport(
+      `${result.distanceCells.toFixed(0)} cells · normalized from ${raw.length} samples · max grade ${result.maxGrade.toFixed(2)}${
+        result.bridgeCells ? ` · ${result.bridgeCells} bridge cells` : ""
+      }${result.warnings.length ? ` — ${result.warnings.join(" ")}` : ""}`
+    );
+    setStatusMessage("Freehand road normalized and added.");
+  };
+
+  const handlePointerCancel = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const hadActiveGesture = freehandActiveRef.current || isBrushing || isPanning;
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setIsPanning(false);
+    setIsBrushing(false);
+    lastPanRef.current = null;
+    freehandActiveRef.current = false;
+    freehandDraftRef.current = [];
+    setFreehandDraft([]);
+    if (hadActiveGesture) setStatusMessage("Map gesture cancelled.");
   };
 
   const handleSelectCity = (city: MapCity) => {
     setSelectedCity(city);
     setSelectedCityName(city.name);
     setSelectedCityPopulation(String(city.population));
+    setSelectedLocationKind(city.kind ?? "settlement");
     setStatusMessage(`Selected ${city.name}`);
+  };
+
+  const handleCreateRoadFromLocations = () => {
+    if (!mapState || !roadFromId || !roadToId || roadFromId === roadToId) {
+      setRoadReport("Choose two different locations for the route.");
+      return;
+    }
+    const from = mapState.cities.find((city) => city.id === roadFromId);
+    const to = mapState.cities.find((city) => city.id === roadToId);
+    if (!from || !to) {
+      setRoadReport("One of the selected locations no longer exists.");
+      return;
+    }
+    const routed = addManualRoad(
+      mapState,
+      { x: from.x, y: from.y, label: from.name, targetType: "city", targetId: from.id },
+      { x: to.x, y: to.y, label: to.name, targetType: "city", targetId: to.id },
+      { naturalVariation: roadNaturalness, maxBridgeCells: allowBridges ? 3 : 0 }
+    );
+    if (routed.map === mapState) {
+      setRoadReport(routed.result.warnings.join(" ") || "No safe route was found.");
+      return;
+    }
+    rememberSnapshot(mapState);
+    markEdited();
+    setMapState(routed.map);
+    setRoadReport(
+      `${from.name} → ${to.name}: ${routed.result.distanceCells.toFixed(0)} cells, max grade ${routed.result.maxGrade.toFixed(2)}${
+        routed.result.bridgeCells ? `, ${routed.result.bridgeCells} bridge cells` : ""
+      }${routed.result.warnings.length ? `. ${routed.result.warnings.join(" ")}` : ""}`
+    );
+    setStatusMessage(`Connected ${from.name} to ${to.name}.`);
   };
 
   const handleUpdateSelectedCity = () => {
@@ -1853,7 +1847,8 @@ export function WorldMapPage() {
       setError("Population must be between 0 and 2,000,000,000.");
       return;
     }
-    const updated = { ...selectedCity, name, population: Math.round(population) };
+    const updated = { ...selectedCity, name, kind: selectedLocationKind, population: Math.round(population) };
+    if (mapState) rememberSnapshot(mapState);
     markEdited();
     setMapState((current) => current ? {
       ...invalidateCompiledMap(current),
@@ -1864,10 +1859,10 @@ export function WorldMapPage() {
     setStatusMessage(`Updated ${name}.`);
   };
 
-  const handleDeleteSelectedCity = () => {
-    if (!selectedCity || !mapState) return;
-    if (!window.confirm(`Remove ${selectedCity.name} and every connected world road? The city plan will be deleted when you save the world map.`)) return;
-    const deleted = selectedCity;
+  const deleteLocation = (locationId: string) => {
+    if (!mapState) return;
+    const deleted = mapState.cities.find((city) => city.id === locationId);
+    if (!deleted) return;
     const endpointThreshold = 0.75 / Math.min(mapState.width, mapState.height);
     const directlyConnectedRoadIds = mapState.roads.flatMap((road) => {
       const first = road.points[0];
@@ -1880,6 +1875,7 @@ export function WorldMapPage() {
         : [];
     });
     const removedRoadIds = collectDependentRoadIds(mapState.roads, directlyConnectedRoadIds);
+    rememberSnapshot(mapState);
     markEdited();
     setMapState((current) => current ? {
       ...invalidateCompiledMap(current),
@@ -1893,15 +1889,15 @@ export function WorldMapPage() {
     setStatusMessage(`${deleted.name} removed. Save the map to commit deletion.`);
   };
 
-  const handleRemoveWorldRoad = (roadId: string) => {
+  const handleDeleteSelectedCity = () => {
+    if (!selectedCity || !mapState) return;
+    setConfirmation({ kind: "delete-location", locationId: selectedCity.id });
+  };
+
+  const deleteRoad = (roadId: string) => {
     if (!mapState) return;
     const removedRoadIds = collectDependentRoadIds(mapState.roads, [roadId]);
-    const dependentCount = removedRoadIds.size - 1;
-    if (!window.confirm(
-      dependentCount > 0
-        ? `Remove this road and ${dependentCount} dependent branch${dependentCount === 1 ? "" : "es"}?`
-        : "Remove this world road?"
-    )) return;
+    rememberSnapshot(mapState);
     markEdited();
     setRoadDraftStart(null);
     setMapState((current) => current ? {
@@ -1911,6 +1907,22 @@ export function WorldMapPage() {
     setStatusMessage(
       `${removedRoadIds.size} road${removedRoadIds.size === 1 ? "" : "s"} removed. Save the map to commit deletion.`
     );
+  };
+
+  const handleRemoveWorldRoad = (roadId: string) => {
+    if (!mapState) return;
+    const dependentCount = collectDependentRoadIds(mapState.roads, [roadId]).size - 1;
+    setConfirmation({ kind: "delete-road", roadId, dependentCount });
+  };
+
+  const confirmMapChange = () => {
+    if (!confirmation) return;
+    const action = confirmation;
+    setConfirmation(null);
+    if (action.kind === "regenerate") generateMap();
+    else if (action.kind === "resize") resizeMap();
+    else if (action.kind === "delete-location") deleteLocation(action.locationId);
+    else deleteRoad(action.roadId);
   };
 
   const handleViewToggle = () => {
@@ -1951,18 +1963,12 @@ export function WorldMapPage() {
           Generate terrain
         </button>
         <button
-          onClick={handleSaveMap}
+          onClick={handleCompileMap}
           className="secondary-button"
           type="button"
-          disabled={saving || (!dirty && compiledAvailable)}
+          disabled={saving || compiling}
         >
-          {saving
-            ? "Saving…"
-            : dirty
-            ? "Save map"
-            : compiledAvailable
-            ? "Saved"
-            : "Build previews"}
+          {compiling ? "Rendering…" : compiledAvailable ? "Refresh presentation" : "Render presentation"}
         </button>
       </section>
       <section className="space-y-2 text-sm">
@@ -1976,7 +1982,7 @@ export function WorldMapPage() {
             type="button"
             disabled={!compiledAvailable || !mapState?.compiled_iso || !mapState?.compiled_grid}
           >
-            {compiledAvailable ? "View compiled map" : "Save to compile"}
+            {compiledAvailable ? "View presentation" : "Render presentation first"}
           </button>
           <button
             type="button"
@@ -1993,7 +1999,7 @@ export function WorldMapPage() {
         <p className="text-[11px] text-earth-sand/60">
           {compiledAvailable
             ? `Last baked: ${compiledTimestamp ?? "unknown"}`
-            : "Save to bake top-down and isometric renders."}
+            : "Render creates top-down and isometric previews; Save persists them."}
         </p>
       </section>
       <section className="space-y-2 text-sm">
@@ -2005,6 +2011,7 @@ export function WorldMapPage() {
             max={0.8}
             step={0.01}
             value={mapState?.water_level ?? DEFAULT_WATER_LEVEL}
+            onPointerDown={() => { if (mapState) rememberSnapshot(mapState); }}
             onChange={(event) => handleWaterChange(Number(event.target.value))}
           />
         </label>
@@ -2015,7 +2022,7 @@ export function WorldMapPage() {
             onClick={handleViewToggle}
             className="px-3 py-1 rounded border border-brand/50 text-xs"
           >
-            {viewMode === "iso" ? "Isometric" : "Top-down"}
+            Switch to {viewMode === "iso" ? "Top-down" : "Isometric"}
           </button>
         </div>
         <label className="flex items-center justify-between gap-4">
@@ -2075,7 +2082,7 @@ export function WorldMapPage() {
           Brush mode
         </p>
         <div className="grid grid-cols-4 gap-2">
-          {["palette", "moisture", "temperature", "vegetation"].map((mode) => (
+          {(["palette", "moisture", "temperature", "vegetation"] as const).map((mode) => (
             <button
               key={mode}
               type="button"
@@ -2086,7 +2093,7 @@ export function WorldMapPage() {
                   : "border-earth-clay/30"
               }`}
             >
-              {mode}
+              {mode === "palette" ? "Biomes" : mode === "moisture" ? "Humidity" : `${mode[0].toUpperCase()}${mode.slice(1)}`}
             </button>
           ))}
         </div>
@@ -2104,13 +2111,14 @@ export function WorldMapPage() {
                     key={biome}
                     type="button"
                     onClick={() => setSelectedBiome(biome)}
-                    className={`rounded border px-2 py-1 text-xs ${
+                  className={`flex min-h-10 items-center gap-2 rounded-xl border px-2 py-1 text-left text-xs ${
                       selectedBiome === biome
                         ? "border-brand bg-brand/15 text-brand-glow"
                         : "border-earth-clay/30"
-                    }`}
+                  }`}
                   >
-                    {biome.replace("_", " ")}
+                    <span className="h-4 w-4 shrink-0 rounded-full border border-white/20" style={{ backgroundColor: `rgb(${BIOME_COLORS[biome].join(",")})` }} aria-hidden="true" />
+                    <span className="capitalize">{biome.replace(/_/g, " ")}</span>
                   </button>
                 ))}
               </div>
@@ -2119,23 +2127,10 @@ export function WorldMapPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {CLIMATE_LAYERS.map((layer) => (
-            <button
-              key={layer.key}
-              type="button"
-              onClick={() => setClimateTarget(layer.key)}
-              className={`w-full text-left px-3 py-2 rounded border ${
-                climateTarget === layer.key
-                  ? "border-brand bg-brand/15"
-                  : "border-earth-clay/30"
-              }`}
-            >
-              <p className="text-xs uppercase tracking-[0.2em] text-earth-sand/60">
-                {layer.label}
-              </p>
-              <p>{`${layer.minLabel} -> ${layer.maxLabel}`}</p>
-            </button>
-          ))}
+          <div className="rounded-xl border border-grove-600/70 bg-grove-800/25 p-3">
+            <p className="text-xs font-semibold capitalize text-brand-glow">{biomeToolMode === "moisture" ? "Humidity" : biomeToolMode}</p>
+            <p className="mt-1 text-xs text-slate-400">{(() => { const layer = CLIMATE_LAYERS.find((item) => item.key === biomeToolMode); return layer ? `${layer.minLabel} → ${layer.maxLabel}` : ""; })()}</p>
+          </div>
           <div className="flex gap-2">
             <button
               type="button"
@@ -2190,7 +2185,7 @@ export function WorldMapPage() {
 
   const renderReliefPanel = () => (
     <div className="space-y-4 text-sm">
-      <div className="flex gap-2">
+      <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
           onClick={() => setReliefAction("raise")}
@@ -2243,6 +2238,94 @@ export function WorldMapPage() {
     </div>
   );
 
+  const renderRoadsPanel = () => (
+    <div className="space-y-5 text-sm">
+      <section className="space-y-3">
+        <div>
+          <p className="section-label">Road builder</p>
+          <p className="mt-2 text-xs leading-5 text-slate-300">Routes weigh grade, altitude, water, vegetation, biomes, and the existing network. Unsafe fallbacks are never added.</p>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {([
+            ["auto", "Auto route"],
+            ["freehand", "Freehand"],
+            ["select", "Navigate"],
+          ] as const).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              aria-pressed={roadToolMode === mode}
+              onClick={() => { setRoadToolMode(mode); setRoadDraftStart(null); setRoadReport(null); }}
+              className={`min-h-11 rounded-xl border px-2 text-xs font-semibold ${roadToolMode === mode ? "border-brand bg-brand/15 text-emerald-100" : "border-grove-600 text-slate-300 hover:bg-grove-700"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {roadToolMode === "auto" && (
+        <section className="space-y-3 rounded-2xl border border-grove-600/70 bg-grove-800/25 p-4">
+          <p className="text-xs font-semibold text-brand-glow">Canvas route</p>
+          <p className="text-xs leading-5 text-slate-400">Choose a start point, then an endpoint. Both snap to nearby locations and roads.</p>
+          {roadDraftStart && (
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-earth-clay/35 bg-earth-clay/10 px-3 py-2 text-xs text-earth-sand">
+              <span>Start: {roadDraftStart.label}</span>
+              <button type="button" className="rounded-lg px-2 py-1 hover:bg-grove-700" onClick={() => setRoadDraftStart(null)}>Cancel</button>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <label className="space-y-1 text-[11px] text-slate-400">From location
+              <select className="input-field !py-2" value={roadFromId} onChange={(event) => setRoadFromId(event.target.value)}>
+                <option value="">Choose…</option>
+                {mapState?.cities.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1 text-[11px] text-slate-400">To location
+              <select className="input-field !py-2" value={roadToId} onChange={(event) => setRoadToId(event.target.value)}>
+                <option value="">Choose…</option>
+                {mapState?.cities.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+              </select>
+            </label>
+          </div>
+          <button type="button" className="secondary-button w-full" onClick={handleCreateRoadFromLocations} disabled={!roadFromId || !roadToId || roadFromId === roadToId}>Create terrain-aware route</button>
+        </section>
+      )}
+
+      {roadToolMode === "freehand" && (
+        <section className="rounded-2xl border border-grove-600/70 bg-grove-800/25 p-4">
+          <p className="text-xs font-semibold text-brand-glow">Draw the desired course</p>
+          <p className="mt-2 text-xs leading-5 text-slate-400">Press, trace the route, and release. The stroke is simplified, resampled, and gently redirected around steep or impassable terrain.</p>
+        </section>
+      )}
+
+      <section className="space-y-3">
+        <label className="block text-xs text-slate-300">Natural variation <span className="float-right text-earth-sand">{Math.round(roadNaturalness * 100)}%</span>
+          <input className="mt-2 w-full accent-emerald-500" type="range" min={0} max={0.6} step={0.05} value={roadNaturalness} onChange={(event) => setRoadNaturalness(Number(event.target.value))} />
+        </label>
+        <label className="flex min-h-11 items-center justify-between rounded-xl border border-grove-600/70 bg-grove-800/25 px-3 text-xs text-slate-300">
+          Allow short bridges
+          <input className="h-4 w-4 accent-emerald-500" type="checkbox" checked={allowBridges} onChange={(event) => setAllowBridges(event.target.checked)} />
+        </label>
+      </section>
+
+      {roadReport && <div className="status-info text-xs leading-5" role="status">{roadReport}</div>}
+
+      <section className="space-y-2">
+        <div className="flex items-center justify-between"><p className="section-label">Road network</p><span className="text-xs text-slate-400">{mapState?.roads.length ?? 0}</span></div>
+        <div className="max-h-52 space-y-1 overflow-y-auto pr-1">
+          {mapState?.roads.map((road, index) => (
+            <div key={road.id} className="flex min-h-11 items-center justify-between gap-2 rounded-xl border border-grove-600/60 bg-grove-800/20 px-3 text-xs">
+              <span><strong className="font-semibold text-brand-glow">Road {index + 1}</strong><span className="ml-2 text-slate-400">{road.points.length} points</span></span>
+              <button type="button" className="rounded-lg px-2 py-1 text-red-200 hover:bg-red-950/35" aria-label={`Remove road ${index + 1}`} onClick={() => handleRemoveWorldRoad(road.id)}>Remove</button>
+            </div>
+          ))}
+          {!mapState?.roads.length && <p className="rounded-xl border border-dashed border-grove-600 px-3 py-5 text-center text-xs text-slate-400">No roads yet.</p>}
+        </div>
+      </section>
+    </div>
+  );
+
   const renderLocationsPanel = () => (
     <div className="space-y-4 text-sm">
       <div className="flex gap-2">
@@ -2266,22 +2349,21 @@ export function WorldMapPage() {
               : "border-earth-clay/30"
           }`}
         >
-          Add city
-        </button>
-        <button
-          type="button"
-          onClick={() => setLocationAction("add-road")}
-          className={`flex-1 rounded border px-3 py-2 ${
-            locationAction === "add-road"
-              ? "border-brand bg-brand/15"
-              : "border-earth-clay/30"
-          }`}
-        >
-          Add road
+          Add location
         </button>
       </div>
       <label className="flex flex-col gap-1">
-        City label
+        Location type
+        <select className="input-field" value={draftLocationKind} onChange={(event) => setDraftLocationKind(event.target.value as MapLocationKind)}>
+          <option value="settlement">Settlement</option>
+          <option value="port">Port</option>
+          <option value="fortress">Fortress</option>
+          <option value="ruin">Ruin</option>
+          <option value="landmark">Landmark</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        Location label
         <input
           className="input-field"
           value={draftCityName}
@@ -2301,16 +2383,20 @@ export function WorldMapPage() {
             }`}
           >
             <p className="text-sm font-semibold">{city.name}</p>
-            <p className="text-xs text-earth-sand/70">
-              {(city.x * mapState.width).toFixed(1)}  |  {(city.y * mapState.height).toFixed(1)}
-            </p>
+            <p className="text-xs capitalize text-earth-sand/70">{city.kind ?? "settlement"} · {(city.x * mapState.width).toFixed(1)}, {(city.y * mapState.height).toFixed(1)}</p>
           </button>
         ))}
-        {!mapState?.cities.length && <p className="text-xs text-earth-sand/60">No cities placed yet.</p>}
+        {!mapState?.cities.length && <p className="text-xs text-earth-sand/60">No locations placed yet.</p>}
       </div>
       {selectedCity && (
         <section className="space-y-2 rounded-xl border border-earth-clay/30 bg-black/20 p-3">
-          <p className="text-xs uppercase tracking-[0.2em] text-earth-sand/60">Selected city</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-earth-sand/60">Selected location</p>
+          <label className="flex flex-col gap-1">
+            Type
+            <select className="input-field" value={selectedLocationKind} onChange={(event) => setSelectedLocationKind(event.target.value as MapLocationKind)}>
+              <option value="settlement">Settlement</option><option value="port">Port</option><option value="fortress">Fortress</option><option value="ruin">Ruin</option><option value="landmark">Landmark</option>
+            </select>
+          </label>
           <label className="flex flex-col gap-1">
             Name
             <input className="input-field" maxLength={120} value={selectedCityName} onChange={(event) => setSelectedCityName(event.target.value)} />
@@ -2321,50 +2407,26 @@ export function WorldMapPage() {
           </label>
           <div className="grid grid-cols-2 gap-2">
             <button type="button" onClick={handleUpdateSelectedCity} className="primary-button">Apply details</button>
-            <button
+            {(selectedLocationKind === "settlement" || selectedLocationKind === "port" || selectedLocationKind === "fortress") && <button
               type="button"
               onClick={() => setCityEditorCity(selectedCity)}
               className="secondary-button"
               disabled={dirty || saving}
               title={dirty ? "Save the world map before editing this city's plan." : undefined}
             >
-              Open city mapper
-            </button>
+              Open City Studio
+            </button>}
           </div>
           {dirty && (
-            <p className="text-xs text-amber-300">Save the world map before opening this city's plan.</p>
+            <p className="text-xs text-amber-300">Save the world map before opening this location's city plan.</p>
           )}
           <button type="button" onClick={handleDeleteSelectedCity} className="w-full rounded border border-red-800/70 px-3 py-2 text-red-300">
-            Remove city and connected roads
+            Remove location and connected roads
           </button>
         </section>
       )}
-      {roadDraftStart && (
-        <button type="button" onClick={() => setRoadDraftStart(null)} className="secondary-button">
-          Cancel road from {roadDraftStart.label}
-        </button>
-      )}
-      <section className="space-y-2">
-        <p className="text-xs uppercase tracking-[0.2em] text-earth-sand/60">World roads</p>
-        <div className="max-h-40 space-y-1 overflow-y-auto pr-1">
-          {mapState?.roads.map((road, index) => (
-            <div key={road.id} className="flex items-center justify-between gap-2 rounded border border-earth-clay/30 px-3 py-2 text-xs">
-              <span>Road {index + 1} · {road.points.length} points</span>
-              <button
-                type="button"
-                aria-label={`Remove world road ${index + 1}`}
-                onClick={() => handleRemoveWorldRoad(road.id)}
-                className="text-red-300"
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-          {!mapState?.roads.length && <p className="text-xs text-earth-sand/60">No roads drawn yet.</p>}
-        </div>
-      </section>
       <p className="text-xs text-earth-sand/70">
-        Road tool snaps to cities or road segments. Right click always pans.
+        Add only places the selected location. Roads and city plans are separate tools.
       </p>
     </div>
   );
@@ -2389,7 +2451,7 @@ export function WorldMapPage() {
         <p className="text-[11px] text-earth-sand/60">
           {compiledTimestamp
             ? `Last baked: ${compiledTimestamp}`
-            : "Save the map to bake fresh renders."}
+            : "Render presentation to create both views, then save to persist them."}
         </p>
       </section>
       <section className="space-y-2">
@@ -2432,6 +2494,8 @@ export function WorldMapPage() {
         return renderBiomePanel();
       case "relief":
         return renderReliefPanel();
+      case "roads":
+        return renderRoadsPanel();
       case "locations":
         return renderLocationsPanel();
       default:
@@ -2458,42 +2522,70 @@ export function WorldMapPage() {
   }
 
   return (
-    <div className="h-full w-full relative text-earth-sand bg-black">
+    <div className="flex h-full w-full flex-col bg-[#050c08] pt-[4.75rem] text-earth-sand">
+      <header className="relative z-30 flex min-h-[4.25rem] shrink-0 items-center justify-between gap-3 border-y border-grove-600/70 bg-grove-900/95 px-3 py-2 shadow-xl backdrop-blur-xl sm:px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <button type="button" className="icon-button shrink-0 sm:hidden" aria-label={sidebarOpen ? "Close map tools" : "Open map tools"} aria-expanded={sidebarOpen} onClick={handleSidebarToggle}>☰</button>
+          <div className="min-w-0">
+            <p className="section-label">Map Studio</p>
+            <p className="truncate font-display text-lg font-semibold text-brand-glow">World cartography</p>
+          </div>
+          <span className={`hidden rounded-full border px-2.5 py-1 text-[11px] font-semibold sm:inline-flex ${dirty ? "border-amber-400/40 bg-amber-950/30 text-amber-200" : "border-emerald-400/35 bg-emerald-950/25 text-emerald-200"}`} role="status">
+            {dirty ? "Unsaved changes" : "Saved"}
+          </span>
+        </div>
+        <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+          <div className="hidden rounded-xl border border-grove-600 bg-grove-950/70 p-1 md:flex" role="group" aria-label="Map mode">
+            <button type="button" aria-pressed={!compiledView} onClick={() => { compiledPreferenceRef.current = true; setCompiledView(false); }} className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${!compiledView ? "bg-brand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}>Edit</button>
+            <button type="button" aria-pressed={compiledView} disabled={!compiledAvailable} onClick={() => { compiledPreferenceRef.current = true; setCompiledView(true); }} className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${compiledView ? "bg-brand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}>Presentation</button>
+          </div>
+          <div className="hidden rounded-xl border border-grove-600 bg-grove-950/70 p-1 lg:flex" role="group" aria-label="Map projection">
+            <button type="button" aria-pressed={viewMode === "grid"} onClick={() => setViewMode("grid")} className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${viewMode === "grid" ? "bg-earth-sand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}>Top-down</button>
+            <button type="button" aria-pressed={viewMode === "iso"} onClick={() => setViewMode("iso")} className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${viewMode === "iso" ? "bg-earth-sand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}>Isometric</button>
+          </div>
+          <button type="button" className="icon-button" aria-label="Undo map edit" title="Undo" onClick={handleUndo} disabled={!undoStack.length || compiledView || saving || compiling}>↶</button>
+          <button type="button" className="icon-button" aria-label="Redo map edit" title="Redo" onClick={handleRedo} disabled={!redoStack.length || compiledView || saving || compiling}>↷</button>
+          <button type="button" className="secondary-button min-h-11 whitespace-nowrap" onClick={handleCompileMap} disabled={saving || compiling}>{compiling ? "Rendering…" : compiledAvailable ? "Refresh presentation" : "Render presentation"}</button>
+          <button type="button" className="primary-button min-h-11 whitespace-nowrap" onClick={handleSaveMap} disabled={saving || compiling || !dirty}>{saving ? "Saving…" : "Save map"}</button>
+        </div>
+      </header>
+      <div className="relative min-h-0 flex-1">
       <div className="absolute inset-0 flex">
+        {sidebarOpen && <button type="button" aria-label="Close map tools" className="absolute inset-0 z-10 bg-black/55 sm:hidden" onClick={() => setSidebarOpen(false)} />}
         <div
-          className={`absolute inset-y-0 left-0 z-20 sm:relative sm:z-auto h-full flex flex-col bg-grove-950/95 text-sm transition-all duration-200 border-r border-earth-clay/20 shadow-2xl sm:shadow-none ${
-            sidebarOpen ? "w-[min(20rem,calc(100vw-3rem))]" : "w-10"
+          className={`absolute inset-y-0 left-0 z-20 h-full flex-col border-r border-grove-600/70 bg-grove-900/97 text-sm shadow-2xl transition-all duration-200 sm:relative sm:z-auto sm:flex sm:shadow-none ${
+            sidebarOpen ? "flex w-[min(23rem,calc(100vw-3rem))]" : "hidden sm:w-[4.25rem]"
           }`}
         >
-          <div className="flex items-center justify-between px-2 py-2 border-b border-earth-clay/20">
+          <div className="flex min-h-12 items-center justify-between border-b border-grove-600/70 px-3 py-2">
             {sidebarOpen && (
-              <p className="text-xs uppercase tracking-[0.3em] text-earth-sand/60">
-                Tools
+              <p className="section-label">
+                {compiledView ? "Presentation" : "Map tools"}
               </p>
             )}
             <button
               type="button"
               aria-label={sidebarOpen ? "Collapse map tools" : "Expand map tools"}
               aria-expanded={sidebarOpen}
-              className="text-lg text-earth-sand/80"
+              className="icon-button !min-h-9 !min-w-9"
               onClick={handleSidebarToggle}
             >
-              {sidebarOpen ? "<" : ">"}
+              {sidebarOpen ? "‹" : "›"}
             </button>
           </div>
           {sidebarOpen ? (
             <div className="flex flex-1 min-h-0 flex-col">
-              <div className="flex gap-1 p-2">
+              <div className="grid grid-cols-2 gap-2 border-b border-grove-600/60 p-3">
                 {(Object.entries(TOOL_GROUP_LABELS) as [ToolGroup, string][]).map(([key, label]) => (
                   <button
                     key={key}
                     type="button"
                     aria-pressed={toolGroup === key}
                     onClick={() => setToolGroup(key)}
-                    className={`flex-1 rounded-full px-3 py-2 text-xs ${
+                    className={`min-h-10 rounded-xl border px-3 py-2 text-xs font-semibold ${
                       toolGroup === key
                         ? "bg-brand text-black font-semibold"
-                        : "bg-transparent border border-earth-clay/30 text-earth-sand/70"
+                        : "border-grove-600 bg-grove-800/25 text-slate-300 hover:bg-grove-700"
                     }`}
                   >
                     {label}
@@ -2527,26 +2619,25 @@ export function WorldMapPage() {
             ) : null}
             {compiledView && !compiledImage ? (
               <div className="absolute inset-0 flex items-center justify-center text-earth-sand/70 text-sm">
-                Save the map to bake the compiled render.
+                Render the presentation views, then save if you want to keep them.
               </div>
             ) : null}
             <canvas
               ref={canvasRef}
-              role="application"
-              aria-label="Interactive world map. Use the selected tool with pointer or touch. Arrow keys pan; plus and minus zoom; Escape cancels a road."
+              role="img"
+              aria-label="World map editor. Use the adjacent tool panels for keyboard-accessible controls; arrow keys pan, plus and minus zoom, and Escape cancels a road gesture."
               tabIndex={0}
               className="absolute inset-0"
               style={{
                 cursor: cursorStyle,
-                opacity: compiledView ? 0.01 : 1,
+                opacity: compiledView ? 0 : 1,
                 pointerEvents: "auto",
                 touchAction: "none",
               }}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerUp}
-              onLostPointerCapture={handlePointerUp}
+              onPointerCancel={handlePointerCancel}
               onKeyDown={(event) => {
                 const panStep = event.shiftKey ? 80 : 32;
                 if (event.key === "ArrowLeft") setPanOffset((current) => ({ ...current, x: current.x + panStep }));
@@ -2555,20 +2646,25 @@ export function WorldMapPage() {
                 else if (event.key === "ArrowDown") setPanOffset((current) => ({ ...current, y: current.y - panStep }));
                 else if (event.key === "+" || event.key === "=") setZoom((current) => clamp(current + 0.1, MIN_ZOOM, MAX_ZOOM));
                 else if (event.key === "-" || event.key === "_") setZoom((current) => clamp(current - 0.1, MIN_ZOOM, MAX_ZOOM));
-                else if (event.key === "Escape") setRoadDraftStart(null);
+                else if (event.key === "Escape") {
+                  setRoadDraftStart(null);
+                  freehandActiveRef.current = false;
+                  freehandDraftRef.current = [];
+                  setFreehandDraft([]);
+                }
                 else return;
                 event.preventDefault();
               }}
               onWheel={handleWheel}
               onContextMenu={(event) => event.preventDefault()}
             />
-            <div className="absolute top-4 right-4 max-w-[calc(100%-2rem)] bg-black/70 backdrop-blur rounded-xl border border-earth-clay/30 px-4 py-3 text-xs space-y-1">
+            <div className="pointer-events-none absolute right-4 top-4 max-w-[calc(100%-2rem)] space-y-1 rounded-xl border border-grove-600/75 bg-grove-950/80 px-4 py-3 text-xs text-slate-200 shadow-xl backdrop-blur">
               <p>
                 {compiledView
-                  ? "Compiled preview \u2014 navigation only"
+                  ? "Presentation preview — navigation only"
                   : `Primary: ${PRIMARY_ACTION_LABEL[primaryAction]}  |  Secondary: Pan`}
               </p>
-              <p>View: {viewMode === "iso" ? "Isometric" : "Grid"}</p>
+              <p>View: {viewMode === "iso" ? "Isometric" : "Top-down"}</p>
               {compiledView && compiledTimestamp && (
                 <p>Last baked: {compiledTimestamp}</p>
               )}
@@ -2584,9 +2680,19 @@ export function WorldMapPage() {
                 {error}
               </div>
             )}
+            {previewWarning && (
+              <div role="alert" className="absolute bottom-6 right-6 max-w-md rounded-xl border border-amber-400/40 bg-amber-950/90 px-4 py-3 text-xs leading-5 text-amber-100 shadow-xl">
+                {previewWarning}
+              </div>
+            )}
           </div>
         </div>
       </div>
+      </div>
+      <footer className="flex min-h-9 shrink-0 items-center justify-between gap-4 border-t border-grove-600/70 bg-grove-950/95 px-4 text-[11px] text-slate-400">
+        <span>{compiledView ? "Presentation mode" : `${TOOL_GROUP_LABELS[toolGroup]} · ${PRIMARY_ACTION_LABEL[primaryAction]}`} · right-drag to pan</span>
+        <span>{mapState.width}×{mapState.height} · {mapState.cities.length} location{mapState.cities.length === 1 ? "" : "s"} · {mapState.roads.length} road{mapState.roads.length === 1 ? "" : "s"} · {Math.round(zoom * 100)}%</span>
+      </footer>
       {cityEditorCity && worldId ? (
         <CityMapEditor
           key={cityEditorCity.id}
@@ -2602,6 +2708,41 @@ export function WorldMapPage() {
           }}
         />
       ) : null}
+      <ConfirmDialog
+        open={Boolean(confirmation)}
+        eyebrow={confirmation?.kind === "delete-road" || confirmation?.kind === "delete-location" ? "Remove map content" : "Replace map content"}
+        title={confirmation?.kind === "resize" ? `Rebuild at ${desiredSize} × ${desiredSize}?` : confirmation?.kind === "regenerate" ? "Generate new terrain?" : confirmation?.kind === "delete-location" ? "Remove this location?" : "Remove this road?"}
+        description={
+          confirmation?.kind === "resize" || confirmation?.kind === "regenerate"
+            ? "This replaces terrain, climate, locations, roads, and any linked city plans after you save. You can undo the local change before saving."
+            : confirmation?.kind === "delete-location"
+              ? `This removes ${mapState.cities.find((city) => city.id === confirmation.locationId)?.name ?? "the location"}, every connected road branch, and its city plan after the world map is saved.`
+              : confirmation?.kind === "delete-road" && confirmation.dependentCount > 0
+                ? `This removes the selected road and ${confirmation.dependentCount} dependent branch${confirmation.dependentCount === 1 ? "" : "es"}. You can undo before saving.`
+                : "This removes the selected road. You can undo before saving."
+        }
+        confirmLabel={confirmation?.kind === "resize" ? "Rebuild map" : confirmation?.kind === "regenerate" ? "Generate terrain" : confirmation?.kind === "delete-location" ? "Remove location" : "Remove road"}
+        danger
+        onCancel={() => setConfirmation(null)}
+        onConfirm={confirmMapChange}
+      />
+      <ConfirmDialog
+        open={navigationConfirmationOpen}
+        eyebrow="Unsaved map changes"
+        title="Leave Map Studio?"
+        description="Your unsaved world-map or city-plan changes will be discarded. Save first if you want to keep this work."
+        confirmLabel="Discard and leave"
+        cancelLabel="Stay in Map Studio"
+        danger
+        onCancel={() => {
+          setNavigationConfirmationOpen(false);
+          if (blocker.state === "blocked") blocker.reset();
+        }}
+        onConfirm={() => {
+          setNavigationConfirmationOpen(false);
+          if (blocker.state === "blocked") blocker.proceed();
+        }}
+      />
     </div>
   );
 }

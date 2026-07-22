@@ -135,9 +135,10 @@ export const BIOME_GROUPS: Array<{ label: string; description: string; biomes: B
 ];
 
 export const TOOL_GROUP_LABELS: Record<ToolGroup, string> = {
-  general: "General",
+  general: "Map",
+  relief: "Terrain",
   biome: "Biome",
-  relief: "Relief",
+  roads: "Roads",
   locations: "Locations",
 };
 
@@ -154,6 +155,7 @@ export const PRIMARY_ACTION_LABEL: Record<PrimaryAction, string> = {
   "lower-vegetation": "Lower vegetation",
   "place-city": "Add city",
   "add-road": "Add road",
+  "draw-road": "Draw road",
 };
 
 export const ACTION_CURSOR: Record<PrimaryAction, string> = {
@@ -169,6 +171,7 @@ export const ACTION_CURSOR: Record<PrimaryAction, string> = {
   "lower-vegetation": "crosshair",
   "place-city": "copy",
   "add-road": "cell",
+  "draw-road": "crosshair",
 };
 
 export const BRUSH_ACTIONS: ReadonlySet<PrimaryAction> = new Set<PrimaryAction>([

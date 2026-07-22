@@ -3,11 +3,14 @@ import { invokeOrThrow } from "./client";
 export type MapCity = {
   id: string;
   name: string;
+  kind?: MapLocationKind;
   x: number;
   y: number;
   elevation: number;
   population: number;
 };
+
+export type MapLocationKind = "settlement" | "port" | "fortress" | "ruin" | "landmark";
 
 export type RoadPoint = {
   x: number;

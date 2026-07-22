@@ -72,6 +72,8 @@ pub struct TemplateInput {
 pub struct MapCity {
     pub id: String,
     pub name: String,
+    #[serde(default = "default_map_location_kind")]
+    pub kind: String,
     pub x: f64,
     pub y: f64,
     pub elevation: f64,
@@ -144,6 +146,12 @@ impl MapState {
         for city in &mut self.cities {
             city.id = validate_id(std::mem::take(&mut city.id), "City ID")?;
             city.name = validate_name(std::mem::take(&mut city.name), "City name")?;
+            if !matches!(
+                city.kind.as_str(),
+                "settlement" | "port" | "fortress" | "ruin" | "landmark"
+            ) {
+                return Err(format!("Unsupported location kind for '{}'", city.name));
+            }
             if !city_ids.insert(city.id.clone()) {
                 return Err(format!("Duplicate city ID: {}", city.id));
             }
@@ -218,6 +226,12 @@ pub struct CityRoad {
     pub tier: Option<u8>,
     #[serde(default)]
     pub external_connection_index: Option<u32>,
+    #[serde(default)]
+    pub external_connection_id: Option<String>,
+    #[serde(default = "default_entity_source")]
+    pub source: String,
+    #[serde(default)]
+    pub locked: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -238,6 +252,18 @@ pub struct CityBuilding {
     pub height: Option<f64>,
     #[serde(default)]
     pub rotation: Option<f64>,
+    #[serde(default)]
+    pub district_id: Option<String>,
+    #[serde(default = "default_entity_source")]
+    pub source: String,
+    #[serde(default)]
+    pub locked: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CityMapPoint {
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -249,23 +275,45 @@ pub struct CityDistrict {
     pub y: f64,
     pub radius: f64,
     pub color: String,
+    #[serde(default)]
+    pub points: Vec<CityMapPoint>,
+    #[serde(default = "default_entity_source")]
+    pub source: String,
+    #[serde(default)]
+    pub locked: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CityEntrance {
+    pub id: String,
+    pub world_road_id: String,
+    pub angle: f64,
+    pub road_class: String,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct CityMap {
+    #[serde(default = "default_city_schema_version")]
+    pub schema_version: u32,
     pub city_id: String,
+    #[serde(default = "default_city_type")]
+    pub city_type: String,
     pub size_label: String,
     pub width: u32,
     pub height: u32,
     pub seed: u64,
     #[serde(default = "default_city_scale")]
     pub scale: f64,
+    #[serde(default = "default_city_density")]
+    pub density: f64,
     #[serde(default = "default_city_architecture")]
     pub road_architecture: String,
     #[serde(default = "default_city_theme")]
     pub road_theme: String,
     #[serde(default)]
     pub external_connections: Vec<f64>,
+    #[serde(default)]
+    pub entrances: Vec<CityEntrance>,
     #[serde(default)]
     pub districts: Vec<CityDistrict>,
     pub roads: Vec<CityRoad>,
@@ -274,7 +322,17 @@ pub struct CityMap {
 
 impl CityMap {
     pub fn normalize_and_validate(&mut self) -> Result<(), String> {
+        if self.schema_version == 0 || self.schema_version > 2 {
+            return Err("Unsupported city-map schema version".into());
+        }
+        self.schema_version = 2;
         self.city_id = validate_id(std::mem::take(&mut self.city_id), "City ID")?;
+        if !matches!(
+            self.city_type.as_str(),
+            "capital" | "trade" | "port" | "fortress" | "industrial" | "rural"
+        ) {
+            return Err("Unsupported city type".into());
+        }
         if !matches!(
             self.size_label.as_str(),
             "village" | "town" | "city" | "megapolis"
@@ -287,12 +345,18 @@ impl CityMap {
         if !self.scale.is_finite() || !(0.5..=2.5).contains(&self.scale) {
             return Err("City map scale must be between 0.5 and 2.5".into());
         }
+        if !self.density.is_finite() || !(0.35..=1.5).contains(&self.density) {
+            return Err("City density must be between 0.35 and 1.5".into());
+        }
         if self.road_theme == "fantasy" {
             self.road_theme = "elvish".into();
         }
+        if self.road_architecture == "star" {
+            self.road_architecture = "radial".into();
+        }
         if !matches!(
             self.road_architecture.as_str(),
-            "ring" | "grid" | "star" | "organic"
+            "ring" | "grid" | "radial" | "organic"
         ) {
             return Err("Unsupported road architecture".into());
         }
@@ -317,6 +381,26 @@ impl CityMap {
                 return Err("External connection angles must be finite radians".into());
             }
         }
+        if self.entrances.len() > 1_000 {
+            return Err("A city map can contain at most 1000 entrances".into());
+        }
+        let mut entrance_ids = HashSet::with_capacity(self.entrances.len());
+        for entrance in &mut self.entrances {
+            entrance.id = validate_id(std::mem::take(&mut entrance.id), "City entrance ID")?;
+            entrance.world_road_id = validate_id(
+                std::mem::take(&mut entrance.world_road_id),
+                "Entrance world road ID",
+            )?;
+            if !entrance_ids.insert(entrance.id.clone()) {
+                return Err(format!("Duplicate city entrance ID: {}", entrance.id));
+            }
+            if !entrance.angle.is_finite() || entrance.angle.abs() > std::f64::consts::TAU {
+                return Err("City entrance angles must be finite radians".into());
+            }
+            if !matches!(entrance.road_class.as_str(), "arterial" | "road") {
+                return Err("Unsupported city entrance road class".into());
+            }
+        }
         if self.districts.len() > 100 {
             return Err("A city map can contain at most 100 districts".into());
         }
@@ -327,15 +411,44 @@ impl CityMap {
             if !district_ids.insert(district.id.clone()) {
                 return Err(format!("Duplicate district ID: {}", district.id));
             }
+            district.kind = match district.kind.as_str() {
+                "centre" => "civic".into(),
+                "market" | "downtown" => "commercial".into(),
+                "ward" => "mixed".into(),
+                "edge" | "outskirts" => "residential".into(),
+                _ => std::mem::take(&mut district.kind),
+            };
             if !matches!(
                 district.kind.as_str(),
-                "centre" | "market" | "downtown" | "ward" | "edge" | "outskirts"
+                "civic"
+                    | "commercial"
+                    | "residential"
+                    | "industrial"
+                    | "harbor"
+                    | "green"
+                    | "mixed"
             ) {
                 return Err(format!("Unsupported district kind for '{}'", district.name));
+            }
+            if !matches!(district.source.as_str(), "generated" | "manual" | "legacy") {
+                return Err(format!(
+                    "Unsupported source for district '{}'",
+                    district.name
+                ));
             }
             validate_unit_value(district.x, "District x coordinate")?;
             validate_unit_value(district.y, "District y coordinate")?;
             validate_positive_unit(district.radius, "District radius")?;
+            if !district.points.is_empty() && !(3..=256).contains(&district.points.len()) {
+                return Err(format!(
+                    "District '{}' polygon must contain between 3 and 256 points",
+                    district.name
+                ));
+            }
+            for point in &district.points {
+                validate_unit_value(point.x, "District polygon x coordinate")?;
+                validate_unit_value(point.y, "District polygon y coordinate")?;
+            }
             if district.color.len() != 7
                 || !district.color.starts_with('#')
                 || !district.color[1..]
@@ -386,6 +499,19 @@ impl CityMap {
                     road.name
                 ));
             }
+            if let Some(connection_id) = &mut road.external_connection_id {
+                *connection_id =
+                    validate_id(std::mem::take(connection_id), "Road external connection ID")?;
+                if !entrance_ids.contains(connection_id) {
+                    return Err(format!(
+                        "External connection for '{}' does not exist",
+                        road.name
+                    ));
+                }
+            }
+            if !matches!(road.source.as_str(), "generated" | "manual" | "legacy") {
+                return Err(format!("Unsupported source for road '{}'", road.name));
+            }
             if road.points.len() < 2 {
                 return Err(format!(
                     "Road '{}' must contain at least two points",
@@ -423,11 +549,24 @@ impl CityMap {
             if !building_ids.insert(building.id.clone()) {
                 return Err(format!("Duplicate building ID: {}", building.id));
             }
+            building.kind = match building.kind.as_str() {
+                "private" => "residential".into(),
+                "public" => "civic".into(),
+                "market" => "commercial".into(),
+                "utility" => "industrial".into(),
+                _ => std::mem::take(&mut building.kind),
+            };
             if !matches!(
                 building.kind.as_str(),
-                "private" | "public" | "market" | "utility"
+                "residential" | "commercial" | "industrial" | "civic" | "landmark"
             ) {
                 return Err(format!("Unsupported building kind for '{}'", building.name));
+            }
+            if !matches!(building.source.as_str(), "generated" | "manual" | "legacy") {
+                return Err(format!(
+                    "Unsupported source for building '{}'",
+                    building.name
+                ));
             }
             validate_unit_value(building.x, "Building x coordinate")?;
             validate_unit_value(building.y, "Building y coordinate")?;
@@ -449,6 +588,15 @@ impl CityMap {
             }) {
                 return Err("Unsupported building district".into());
             }
+            if let Some(district_id) = &mut building.district_id {
+                *district_id = validate_id(std::mem::take(district_id), "Building district ID")?;
+                if !district_ids.contains(district_id) {
+                    return Err(format!(
+                        "District for building '{}' does not exist",
+                        building.name
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -456,6 +604,21 @@ impl CityMap {
 
 fn default_city_scale() -> f64 {
     1.0
+}
+fn default_map_location_kind() -> String {
+    "settlement".into()
+}
+fn default_city_schema_version() -> u32 {
+    1
+}
+fn default_city_type() -> String {
+    "trade".into()
+}
+fn default_city_density() -> f64 {
+    0.85
+}
+fn default_entity_source() -> String {
+    "legacy".into()
 }
 fn default_city_architecture() -> String {
     "ring".into()
@@ -583,6 +746,7 @@ mod tests {
         let city = MapCity {
             id: "same".into(),
             name: "A".into(),
+            kind: "settlement".into(),
             x: 0.5,
             y: 0.5,
             elevation: 0.5,
@@ -609,15 +773,19 @@ mod tests {
     #[test]
     fn city_map_normalizes_the_legacy_theme_and_checks_connection_markers() {
         let mut map = CityMap {
+            schema_version: 2,
             city_id: "city-1".into(),
+            city_type: "trade".into(),
             size_label: "town".into(),
             width: 1,
             height: 1,
             seed: 1,
             scale: 1.0,
+            density: 0.85,
             road_architecture: "ring".into(),
             road_theme: "fantasy".into(),
             external_connections: vec![0.0],
+            entrances: vec![],
             districts: vec![],
             roads: vec![CityRoad {
                 id: "road-1".into(),
@@ -637,6 +805,9 @@ mod tests {
                 ],
                 tier: Some(1),
                 external_connection_index: Some(0),
+                external_connection_id: None,
+                source: "generated".into(),
+                locked: false,
             }],
             buildings: vec![],
         };
@@ -644,6 +815,54 @@ mod tests {
         assert_eq!(map.road_theme, "elvish");
 
         map.roads[0].external_connection_index = Some(1);
+        assert!(map.normalize_and_validate().is_err());
+    }
+
+    #[test]
+    fn city_map_migrates_legacy_layout_districts_and_buildings() {
+        let json = r##"{
+            "city_id":"city-1",
+            "size_label":"town",
+            "width":1,
+            "height":1,
+            "seed":7,
+            "road_architecture":"star",
+            "road_theme":"fantasy",
+            "external_connections":[],
+            "districts":[{
+                "id":"district-1","name":"Old Ward","kind":"ward",
+                "x":0.5,"y":0.5,"radius":0.2,"color":"#38bdf8"
+            }],
+            "roads":[],
+            "buildings":[{
+                "id":"building-1","name":"Old Home","kind":"private",
+                "x":0.5,"y":0.5,"footprint":0.02
+            }]
+        }"##;
+        let mut map: CityMap = serde_json::from_str(json).unwrap();
+        map.normalize_and_validate().unwrap();
+        assert_eq!(map.schema_version, 2);
+        assert_eq!(map.city_type, "trade");
+        assert_eq!(map.road_architecture, "radial");
+        assert_eq!(map.road_theme, "elvish");
+        assert_eq!(map.districts[0].kind, "mixed");
+        assert_eq!(map.districts[0].source, "legacy");
+        assert_eq!(map.buildings[0].kind, "residential");
+        assert_eq!(map.buildings[0].source, "legacy");
+    }
+
+    #[test]
+    fn map_rejects_unknown_location_kinds() {
+        let mut map = valid_map();
+        map.cities.push(MapCity {
+            id: "location-1".into(),
+            name: "Impossible".into(),
+            kind: "spaceship".into(),
+            x: 0.5,
+            y: 0.5,
+            elevation: 0.5,
+            population: 0,
+        });
         assert!(map.normalize_and_validate().is_err());
     }
 }

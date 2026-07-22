@@ -36,7 +36,7 @@ export type Biome =
   | "snow";
 
 export type ViewMode = "iso" | "grid";
-export type ToolGroup = "general" | "biome" | "relief" | "locations";
+export type ToolGroup = "general" | "relief" | "biome" | "roads" | "locations";
 export type BiomeToolMode = "palette" | "moisture" | "temperature" | "vegetation";
 export type ClimateTarget = "moisture" | "temperature" | "vegetation";
 export type PrimaryAction =
@@ -51,7 +51,8 @@ export type PrimaryAction =
   | "raise-vegetation"
   | "lower-vegetation"
   | "place-city"
-  | "add-road";
+  | "add-road"
+  | "draw-road";
 
 export type PixelPoint = { x: number; y: number };
 export type PanVector = { x: number; y: number };

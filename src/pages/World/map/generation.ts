@@ -141,24 +141,43 @@ export function ensureExtendedMap(map: MapState): MapStateExtended {
     sanitizeLayer(extended.vegetation, generateVegetationLayer(width, height, seed + 999, moisture));
   const compiledImage = (value: unknown) =>
     typeof value === "string" &&
-    value.length <= 32_000_000 &&
+    value.length <= 24 * 1024 * 1024 &&
     /^data:image\/png;base64,[a-z0-9+/=]+$/i.test(value)
       ? value
       : undefined;
-  const cities = (Array.isArray(map.cities) ? map.cities : []).slice(0, 2_000).flatMap((city, index) => {
+  const rawCities = Array.isArray(map.cities) ? map.cities : [];
+  if (rawCities.length > 10_000) {
+    throw new Error(`Saved map contains ${rawCities.length} locations; the limit is 10,000.`);
+  }
+  const locationKinds = new Set(["settlement", "port", "fortress", "ruin", "landmark"]);
+  const cities = rawCities.flatMap((city, index) => {
     if (!city || !Number.isFinite(city.x) || !Number.isFinite(city.y)) return [];
+    const x = clamp(city.x, 0.5 / width, 1 - 0.5 / width);
+    const y = clamp(city.y, 0.5 / height, 1 - 0.5 / height);
+    const gridX = clamp(Math.floor(x * width), 0, width - 1);
+    const gridY = clamp(Math.floor(y * height), 0, height - 1);
     return [{
       id: typeof city.id === "string" && city.id ? city.id.slice(0, 128) : `city-${index}`,
       name: typeof city.name === "string" && city.name.trim() ? city.name.trim().slice(0, 120) : `City ${index + 1}`,
-      x: clamp(city.x, 0.5 / width, 1 - 0.5 / width),
-      y: clamp(city.y, 0.5 / height, 1 - 0.5 / height),
-      elevation: Number.isFinite(city.elevation) ? clamp(city.elevation) : relief[Math.round((clamp(city.y) * height) - 0.5) * width + Math.round((clamp(city.x) * width) - 0.5)] ?? 0,
+      kind: locationKinds.has(city.kind ?? "") ? city.kind : "settlement",
+      x,
+      y,
+      elevation: Number.isFinite(city.elevation) ? clamp(city.elevation) : relief[gridY * width + gridX] ?? 0,
       population: Number.isFinite(city.population) ? Math.max(0, Math.round(city.population)) : 0,
     }];
   });
-  const roads = (Array.isArray(map.roads) ? map.roads : []).slice(0, 4_000).flatMap((road, index) => {
+  const rawRoads = Array.isArray(map.roads) ? map.roads : [];
+  if (rawRoads.length > 25_000) {
+    throw new Error(`Saved map contains ${rawRoads.length} roads; the limit is 25,000.`);
+  }
+  let totalRoadPoints = 0;
+  const roads = rawRoads.flatMap((road, index) => {
     if (!road || !Array.isArray(road.points)) return [];
-    const points = road.points.slice(0, 10_000).flatMap((point) =>
+    totalRoadPoints += road.points.length;
+    if (totalRoadPoints > 500_000) {
+      throw new Error("Saved map contains more than 500,000 road points.");
+    }
+    const points = road.points.flatMap((point) =>
       point && Number.isFinite(point.x) && Number.isFinite(point.y)
         ? [{ x: clamp(point.x, 0, 1), y: clamp(point.y, 0, 1) }]
         : []

@@ -170,15 +170,19 @@ mod tests {
 
     fn city_map(city_id: &str) -> CityMap {
         CityMap {
+            schema_version: 2,
             city_id: city_id.into(),
+            city_type: "trade".into(),
             size_label: "town".into(),
             width: 1,
             height: 1,
             seed: 42,
             scale: 1.0,
+            density: 0.85,
             road_architecture: "ring".into(),
             road_theme: "elvish".into(),
             external_connections: vec![],
+            entrances: vec![],
             districts: Vec::<CityDistrict>::new(),
             roads: Vec::<CityRoad>::new(),
             buildings: Vec::<CityBuilding>::new(),
