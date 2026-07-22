@@ -1,5 +1,10 @@
 import type { MapStateExtended, Biome } from "./types";
+import { BIOME_TARGETS } from "./constants";
 import { pseudoRandom } from "./math";
+
+const LAND_BIOMES = Object.keys(BIOME_TARGETS).filter(
+  (biome) => !["ocean", "shallow", "reef", "beach", "mangrove", "wetland"].includes(biome)
+) as Biome[];
 
 export function stylizeColor(color: [number, number, number]) {
   const [r, g, b] = color;
@@ -17,51 +22,44 @@ export function computeBiome(map: MapStateExtended, idx: number): Biome {
   const vegetation = map.vegetation[idx];
   const seaLevel = map.water_level;
 
-  if (relief <= seaLevel * 0.8) return "ocean";
-  if (relief <= seaLevel * 0.9) {
-    if (moisture > 0.8) return "mangrove";
-    return moisture > 0.4 ? "shallow" : "reef";
+  if (![relief, moisture, temperature, vegetation, seaLevel].every(Number.isFinite)) {
+    return "plains";
   }
-  if (relief <= seaLevel + 0.03) {
-    if (moisture > 0.75) return "wetland";
-    return temperature > 0.65 ? "beach" : "reef";
+
+  const depth = relief - seaLevel;
+  if (depth <= -0.12) return "ocean";
+  if (depth <= -0.025) {
+    if (moisture >= 0.84 && temperature >= 0.62 && vegetation >= 0.58) {
+      return "mangrove";
+    }
+    if (temperature >= 0.58 && vegetation >= 0.34) return "reef";
+    return "shallow";
   }
-  if (relief > 0.92) {
-    if (temperature > 0.75) return "obsidian_ridge";
-    return temperature < 0.2 ? "snow" : "mountain";
+  if (depth <= 0.035) {
+    if (moisture >= 0.72 && vegetation >= 0.52) return "wetland";
+    if (temperature >= 0.62 && moisture < 0.72) return "beach";
+    return "reef";
   }
-  if (relief > 0.85 && temperature > 0.7) {
-    return vegetation < 0.25 ? "lava_lake" : "hot_springs";
+
+  let nearest: Biome = "plains";
+  let nearestScore = Infinity;
+  for (const biome of LAND_BIOMES) {
+    const target = BIOME_TARGETS[biome];
+    const reliefDelta = relief - target.relief;
+    const moistureDelta = moisture - target.moisture;
+    const temperatureDelta = temperature - target.temperature;
+    const vegetationDelta = vegetation - target.vegetation;
+    const score =
+      reliefDelta * reliefDelta * 1.8 +
+      moistureDelta * moistureDelta +
+      temperatureDelta * temperatureDelta * 1.15 +
+      vegetationDelta * vegetationDelta * 0.8;
+    if (score < nearestScore) {
+      nearestScore = score;
+      nearest = biome;
+    }
   }
-  if (relief > 0.75) {
-    if (temperature < 0.3) return "glacier";
-    return moisture > 0.55 ? "highland" : "hills";
-  }
-  if (temperature < 0.2) {
-    return vegetation > 0.35 ? "boreal_forest" : "tundra";
-  }
-  if (moisture > 0.9) {
-    return temperature > 0.65 ? "rainforest" : "swamp";
-  }
-  if (moisture > 0.75) {
-    return vegetation > 0.65 ? "forest" : "hilly_forest";
-  }
-  if (moisture > 0.6) {
-    return vegetation > 0.5 ? "meadow" : "plains";
-  }
-  if (moisture > 0.45) {
-    return temperature > 0.6 ? "savanna" : "plains";
-  }
-  if (moisture > 0.3) {
-    return temperature > 0.55 ? "steppe" : "icy_plains";
-  }
-  if (temperature > 0.75) {
-    return vegetation < 0.25 ? "crystal_desert" : "desert";
-  }
-  if (vegetation < 0.2) {
-    return relief > 0.55 ? "basalt_fields" : "salt_flat";
-  }
-  return "badlands";
+  return nearest;
 }
 
 export function buildBiomeGrid(map: MapStateExtended): Biome[] {
@@ -148,7 +146,13 @@ export function buildSmoothPath(
   jitterScale: number,
   seed: number
 ): Path2D {
-  const jittered = loop.map(([x, y], idx) => {
+  const normalizedLoop =
+    loop.length > 1 &&
+    loop[0][0] === loop[loop.length - 1][0] &&
+    loop[0][1] === loop[loop.length - 1][1]
+      ? loop.slice(0, -1)
+      : loop;
+  const jittered = normalizedLoop.map(([x, y], idx) => {
     const jx = (pseudoRandom(x + idx * 3, y + seed, seed + 17) - 0.5) * cellSize * jitterScale;
     const jy = (pseudoRandom(x + seed, y + idx * 7, seed + 33) - 0.5) * cellSize * jitterScale;
     return { x: x * cellSize + jx, y: y * cellSize + jy };
@@ -164,13 +168,10 @@ export function buildSmoothPath(
   const start = mid(jittered[n - 1], jittered[0]);
   path.moveTo(start.x, start.y);
   for (let i = 0; i < n; i += 1) {
+    const current = jittered[i];
     const next = jittered[(i + 1) % n];
-    const c2 = mid(next, jittered[(i + 2) % n]);
-    path.quadraticCurveTo(next.x, next.y, c2.x, c2.y);
-    if (i === n - 2) {
-      path.quadraticCurveTo(jittered[n - 1].x, jittered[n - 1].y, start.x, start.y);
-      break;
-    }
+    const endpoint = mid(current, next);
+    path.quadraticCurveTo(current.x, current.y, endpoint.x, endpoint.y);
   }
   path.closePath();
   return path;

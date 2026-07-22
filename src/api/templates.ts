@@ -28,9 +28,7 @@ export async function listWorldTemplates(
 ): Promise<WorldTemplate[]> {
   return await invokeOrThrow<WorldTemplate[]>("list_world_templates", {
     worldId,
-    world_id: worldId,
     templateType,
-    template_type: templateType,
   });
 }
 
@@ -40,7 +38,6 @@ export async function saveWorldTemplates(
 ): Promise<WorldTemplate[]> {
   return await invokeOrThrow<WorldTemplate[]>("save_world_templates", {
     worldId,
-    world_id: worldId,
     templates,
   });
 }

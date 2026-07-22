@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import type { CityDistrict, CityMap, CityRoad, CityRoadPoint, CitySize } from "../api/cityMap";
 import { getCityMap, saveCityMap } from "../api/cityMap";
+import { getErrorMessage } from "../api/client";
 import type { MapCity } from "../api/worldMap";
 import { ROAD_THEMES, roadName, type RoadTheme } from "./cityRoadNames";
 
@@ -8,7 +10,10 @@ type Props = {
   city: MapCity;
   externalConnections?: number[];
   onClose: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 };
+
+const EMPTY_CONNECTIONS: number[] = [];
 
 const CITY_SIZES: { key: CitySize; label: string; avenues: number; fillers: number }[] = [
   { key: "village", label: "Village", avenues: 3, fillers: 16 },
@@ -38,7 +43,10 @@ const SPECIAL_TYPES = ["Palace / keep", "Temple", "Market hall", "Guildhall", "B
 type RoadArchitecture = "ring" | "grid" | "star" | "organic";
 
 function randomId() {
-  return Math.random().toString(36).slice(2, 9);
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 function pseudoRandom(seed: number) {
@@ -74,7 +82,9 @@ function generateCityMap(city: MapCity, size: CitySize, scale = 1, seed = Date.n
   for (let i = 0; i < avenues; i += 1) {
     const angle = (Math.PI * 2 * i) / avenues + (rng() - 0.5) * 0.18;
     const tier = (size === "village" ? 1 : Math.min(5, 2 + Math.floor(i / Math.max(1, avenues / 3)))) as 1 | 2 | 3 | 4 | 5;
-    const gridOffset = ((i / Math.max(1, avenues - 1)) - 0.5) * radius * 1.7;
+    const orientationIndex = Math.floor(i / 2);
+    const orientationCount = i % 2 === 0 ? Math.ceil(avenues / 2) : Math.floor(avenues / 2);
+    const gridOffset = ((orientationIndex / Math.max(1, orientationCount - 1)) - 0.5) * radius * 1.7;
     const points = architecture === "grid"
       ? i % 2 === 0
         ? [{ id: randomId(), x: 0.5 + gridOffset, y: 0.5 - radius }, { id: randomId(), x: 0.5 + gridOffset, y: 0.5 + radius }]
@@ -93,7 +103,7 @@ function generateCityMap(city: MapCity, size: CitySize, scale = 1, seed = Date.n
     const ringRadius = radius * (ring / (rings + 1));
     roads.push({ id: randomId(), name: roadName(theme, ring + avenues, 2), importance: "secondary", tier: Math.min(3, ring + 1) as 1 | 2 | 3, points: Array.from({ length: avenues + 1 }, (_, i) => point(ringRadius, (Math.PI * 2 * i) / avenues)) });
   }
-  externalConnections.forEach((angle, index) => roads.push({ id: randomId(), name: roadName(theme, avenues + index, 4), importance: "main", tier: (size === "megapolis" ? 5 : 3) as 3 | 5, points: [point(radius, angle), point(0.5, angle)] }));
+  externalConnections.forEach((angle, index) => roads.push({ id: randomId(), name: roadName(theme, avenues + index, 4), importance: "main", tier: (size === "megapolis" ? 5 : 3) as 3 | 5, external_connection_index: index, points: [point(radius, angle), point(0.5, angle)] }));
   const buildings = Array.from({ length: Math.round(sizeMeta.fillers * scale) }, (_, index) => {
     const road = roads[index % roads.length];
     const a = road.points[Math.min(road.points.length - 2, Math.floor(rng() * Math.max(1, road.points.length - 1)))];
@@ -122,19 +132,15 @@ function clamp(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
 }
 
-function placeSpecialBuilding(map: CityMap, pending: PendingBuilding, rngSeed = Date.now()): CityMap {
-  const rng = pseudoRandom(rngSeed);
-  const radius = pending.district === "centre" ? 0.04 : pending.district === "midtown" ? 0.17 : pending.district === "edge" ? 0.3 : 0.4;
-  const angle = rng() * Math.PI * 2;
-  const coordinates = { x: clamp(0.5 + Math.cos(angle) * radius), y: clamp(0.5 + Math.sin(angle) * radius) };
+function placeSpecialBuilding(map: CityMap, pending: PendingBuilding, coordinates: { x: number; y: number }): CityMap {
   const buildings = [
     ...map.buildings,
     {
       id: randomId(),
       name: pending.name,
       kind: pending.kind,
-      x: coordinates.x,
-      y: coordinates.y,
+      x: clamp(coordinates.x, 0.02, 0.98),
+      y: clamp(coordinates.y, 0.02, 0.98),
       footprint: pending.kind === "public" || pending.kind === "market" ? 0.035 : 0.022,
       role: pending.role,
       district: pending.district,
@@ -144,7 +150,83 @@ function placeSpecialBuilding(map: CityMap, pending: PendingBuilding, rngSeed = 
   return { ...map, buildings };
 }
 
-export function CityMapEditor({ city, externalConnections = [], onClose }: Props) {
+function isNamedBuilding(building: CityMap["buildings"][number]) {
+  return Boolean(building.role || building.district);
+}
+
+function rebuildCityMap(
+  city: MapCity,
+  current: CityMap,
+  options: Partial<{
+    size: CitySize;
+    scale: number;
+    seed: number;
+    architecture: RoadArchitecture;
+    theme: RoadTheme;
+  }> = {},
+  externalConnections: number[] = []
+) {
+  const rebuilt = generateCityMap(
+    city,
+    options.size ?? current.size_label,
+    options.scale ?? current.scale ?? 1,
+    options.seed ?? current.seed,
+    options.architecture ?? current.road_architecture ?? "ring",
+    options.theme ?? (current.road_theme as RoadTheme | undefined) ?? "elvish",
+    externalConnections
+  );
+  return {
+    ...rebuilt,
+    buildings: [...rebuilt.buildings, ...current.buildings.filter(isNamedBuilding)],
+  };
+}
+
+function synchronizeExternalConnections(
+  city: MapCity,
+  map: CityMap,
+  externalConnections: number[]
+) {
+  const previous = map.external_connections ?? [];
+  if (
+    previous.length === externalConnections.length &&
+    previous.every((angle, index) => Math.abs(angle - externalConnections[index]) < 0.0001)
+  ) {
+    return map;
+  }
+  const generated = generateCityMap(
+    city,
+    map.size_label,
+    map.scale ?? 1,
+    map.seed,
+    map.road_architecture ?? "ring",
+    (map.road_theme as RoadTheme | undefined) ?? "elvish",
+    externalConnections
+  );
+  const markedConnections = map.roads.filter((road) => road.external_connection_index !== undefined);
+  let legacyConnectionIds = new Set<string>();
+  if (!markedConnections.length && previous.length && previous.length <= map.roads.length) {
+    const tail = map.roads.slice(-previous.length);
+    const geometryMatches = tail.every((road, index) => {
+      const endpoint = road.points[road.points.length - 1];
+      if (!endpoint || road.points.length !== 2 || road.importance !== "main") return false;
+      const actual = Math.atan2(endpoint.y - 0.5, endpoint.x - 0.5);
+      const difference = Math.atan2(Math.sin(actual - previous[index]), Math.cos(actual - previous[index]));
+      return Math.abs(difference) < 0.08;
+    });
+    if (geometryMatches) legacyConnectionIds = new Set(tail.map((road) => road.id));
+  }
+  const baseRoads = map.roads.filter(
+    (road) => road.external_connection_index === undefined && !legacyConnectionIds.has(road.id)
+  );
+  const generatedConnections = generated.roads.slice(generated.roads.length - externalConnections.length);
+  return {
+    ...map,
+    external_connections: [...externalConnections],
+    roads: [...baseRoads, ...generatedConnections],
+  };
+}
+
+export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, onClose, onDirtyChange }: Props) {
   const [mapData, setMapData] = useState<CityMap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -159,45 +241,106 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
   const [residentTag, setResidentTag] = useState("");
   const [saving, setSaving] = useState(false);
   const [showDistricts, setShowDistricts] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const revisionRef = useRef(0);
+
+  const applyEdit = useCallback((updater: (current: CityMap) => CityMap) => {
+    revisionRef.current += 1;
+    setMapData((current) => {
+      if (!current) return current;
+      return updater(current);
+    });
+    setDirty(true);
+    setError(null);
+    setStatus(null);
+  }, []);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
 
   useEffect(() => {
     let mounted = true;
     setLoading(true);
+    setMapData(null);
+    setError(null);
+    setStatus(null);
+    setDirty(false);
+    revisionRef.current = 0;
+    setBuildingName(`${city.name} Hall`);
     getCityMap(city.id)
       .then((existing) => {
         if (!mounted) return;
         if (existing) {
           setMapData(existing);
+          setDirty(false);
         } else {
           setMapData(generateCityMap(city, "town", 1, Date.now(), "ring", "elvish", externalConnections));
+          setDirty(true);
         }
         setError(null);
       })
-      .catch((e) => mounted && setError(String(e)))
+      .catch((e) => {
+        if (!mounted) return;
+        setError(getErrorMessage(e, "We couldn't load this city map."));
+        setMapData(null);
+      })
       .finally(() => mounted && setLoading(false));
     return () => {
       mounted = false;
     };
-  }, [city.id]);
+  }, [city.id, loadAttempt]);
 
   useEffect(() => {
-    setMapData((current) => {
-      if (!current) return current;
-      const previous = current.external_connections ?? [];
-      if (previous.length === externalConnections.length && previous.every((angle, index) => Math.abs(angle - externalConnections[index]) < 0.01)) return current;
-      const rebuilt = generateCityMap(city, current.size_label, current.scale ?? 1, current.seed, current.road_architecture ?? "ring", (current.road_theme ?? "elvish") as RoadTheme, externalConnections);
-      return { ...rebuilt, buildings: [...rebuilt.buildings, ...current.buildings.filter((building) => building.role || building.kind !== "private")] };
-    });
-  }, [city, externalConnections]);
+    if (loading || !mapData) return;
+    const synchronized = synchronizeExternalConnections(city, mapData, externalConnections);
+    if (synchronized === mapData) return;
+    revisionRef.current += 1;
+    setMapData(synchronized);
+    setDirty(true);
+    setStatus("World-road approaches updated; save to keep this city plan in sync.");
+  }, [city, externalConnections, loading, mapData]);
 
   const sizeMeta = useMemo(
     () => CITY_SIZES.find((s) => s.key === mapData?.size_label) ?? CITY_SIZES[1],
     [mapData?.size_label]
   );
+  const namedBuildings = useMemo(
+    () => mapData?.buildings.filter(isNamedBuilding) ?? [],
+    [mapData?.buildings]
+  );
 
-  const handleSvgClick = () => {
-    if (!mapData || !placingBuilding) return;
-    setMapData(placeSpecialBuilding(mapData, placingBuilding));
+  const handleSvgClick = (event: ReactMouseEvent<SVGSVGElement>) => {
+    if (!mapData || !placingBuilding || saving) return;
+    const transform = event.currentTarget.getScreenCTM();
+    if (!transform) return;
+    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(transform.inverse());
+    applyEdit((current) => placeSpecialBuilding(current, placingBuilding, point));
+    setPlacingBuilding(null);
+    setShowDistricts(false);
+    setBuildingName(`${city.name} Hall`);
+    setStatus(`${placingBuilding.name} placed. Save the city map to keep it.`);
+  };
+
+  const placeInSelectedDistrict = () => {
+    if (!placingBuilding) return;
+    const fallbackPoint: Record<District, { x: number; y: number }> = {
+      centre: { x: 0.5, y: 0.5 },
+      midtown: { x: 0.67, y: 0.5 },
+      edge: { x: 0.79, y: 0.5 },
+      outskirts: { x: 0.9, y: 0.5 },
+    };
+    applyEdit((current) => placeSpecialBuilding(current, placingBuilding, fallbackPoint[placingBuilding.district ?? "centre"]));
+    setStatus(`${placingBuilding.name} placed. Save the city map to keep it.`);
     setPlacingBuilding(null);
     setShowDistricts(false);
     setBuildingName(`${city.name} Hall`);
@@ -206,54 +349,65 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
   const handleRandomizeRoads = () => {
     if (!mapData) return;
     const seed = Date.now();
-    setMapData(generateCityMap(city, mapData.size_label, mapData.scale ?? 1, seed, mapData.road_architecture ?? "ring", (mapData.road_theme ?? "elvish") as RoadTheme, externalConnections));
+    applyEdit((current) => rebuildCityMap(city, current, { seed }, externalConnections));
     setStatus("Regenerated road layout.");
   };
 
   const handleSizeChange = (size: CitySize) => {
     if (!mapData) return;
-    setMapData(generateCityMap(city, size, mapData.scale ?? 1, Date.now(), mapData.road_architecture ?? "ring", (mapData.road_theme ?? "elvish") as RoadTheme, externalConnections));
+    applyEdit((current) => rebuildCityMap(city, current, { size, seed: Date.now() }, externalConnections));
   };
 
   const handleScaleChange = (scale: number) => {
     if (!mapData) return;
-    setMapData(generateCityMap(city, mapData.size_label, scale, mapData.seed, mapData.road_architecture ?? "ring", (mapData.road_theme ?? "elvish") as RoadTheme, externalConnections));
+    applyEdit((current) => rebuildCityMap(city, current, { scale }, externalConnections));
   };
 
   const regenerateLayout = (architecture: RoadArchitecture, theme: RoadTheme) => {
     if (!mapData) return;
-    setMapData(generateCityMap(city, mapData.size_label, mapData.scale ?? 1, Date.now(), architecture, theme, externalConnections));
+    applyEdit((current) => rebuildCityMap(city, current, { architecture, theme, seed: Date.now() }, externalConnections));
+  };
+
+  const handleThemeChange = (theme: RoadTheme) => {
+    applyEdit((current) => ({
+      ...current,
+      road_theme: theme,
+      roads: current.roads.map((road, index) => ({
+        ...road,
+        name: roadName(theme, index, road.tier ?? 1),
+      })),
+    }));
   };
 
   const saveResidentTag = () => {
     if (!mapData || !selectedResidenceId) return;
-    setMapData({ ...mapData, buildings: mapData.buildings.map((building) => building.id === selectedResidenceId ? { ...building, role: residentTag.trim() || undefined } : building) });
+    applyEdit((current) => ({ ...current, buildings: current.buildings.map((building) => building.id === selectedResidenceId ? { ...building, role: residentTag.trim().slice(0, 120) || undefined } : building) }));
     setSelectedResidenceId(null);
     setResidentTag("");
   };
 
   const updateRoadPoint = (roadId: string, pointId: string, patch: Partial<CityRoadPoint>) => {
     if (!mapData) return;
-    setMapData({
-      ...mapData,
-      roads: mapData.roads.map((road) =>
+    applyEdit((current) => ({
+      ...current,
+      roads: current.roads.map((road) =>
         road.id !== roadId
           ? road
           : {
               ...road,
               points: road.points.map((point) =>
-                point.id === pointId ? { ...point, ...patch } : point
+                point.id === pointId ? { ...point, x: clamp(patch.x ?? point.x), y: clamp(patch.y ?? point.y) } : point
               ),
             }
       ),
-    });
+    }));
   };
 
   const addRoadPoint = (roadId: string) => {
     if (!mapData) return;
-    setMapData({
-      ...mapData,
-      roads: mapData.roads.map((road) =>
+    applyEdit((current) => ({
+      ...current,
+      roads: current.roads.map((road) =>
         road.id !== roadId
           ? road
           : {
@@ -262,66 +416,125 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                 ...road.points,
                 {
                   id: randomId(),
-                  x: clamp(road.points[road.points.length - 1]?.x ?? 0.5 + 0.05),
-                  y: clamp(road.points[road.points.length - 1]?.y ?? 0.5 + 0.05),
+                  x: clamp((road.points[road.points.length - 1]?.x ?? 0.5) + 0.05),
+                  y: clamp((road.points[road.points.length - 1]?.y ?? 0.5) + 0.05),
                 },
               ],
             }
       ),
-    });
+    }));
+  };
+
+  const removeRoadPoint = (roadId: string, pointId: string) => {
+    applyEdit((current) => ({
+      ...current,
+      roads: current.roads.map((road) =>
+        road.id === roadId && road.points.length > 2
+          ? { ...road, points: road.points.filter((point) => point.id !== pointId) }
+          : road
+      ),
+    }));
+  };
+
+  const removeRoad = (roadId: string) => {
+    applyEdit((current) => ({
+      ...current,
+      roads: current.roads.filter((road) => road.id !== roadId),
+    }));
   };
 
   const removeBuilding = (id: string) => {
     if (!mapData) return;
-    setMapData({
-      ...mapData,
-      buildings: mapData.buildings.filter((b) => b.id !== id),
-    });
+    applyEdit((current) => ({
+      ...current,
+      buildings: current.buildings.filter((b) => b.id !== id),
+    }));
   };
 
   const handleSave = async () => {
     if (!mapData) return;
     setSaving(true);
+    setError(null);
+    const saveRevision = revisionRef.current;
     try {
-      await saveCityMap(city.id, mapData);
-      setStatus("City map saved.");
+      const saved = await saveCityMap(city.id, mapData);
+      if (revisionRef.current === saveRevision) {
+        setMapData(saved);
+        setDirty(false);
+        setStatus("City map saved.");
+      } else {
+        setStatus("Saved an earlier snapshot; newer edits are still unsaved.");
+      }
     } catch (e) {
-      setError(String(e));
+      setError(getErrorMessage(e, "We couldn't save this city map."));
     } finally {
       setSaving(false);
     }
   };
 
+  const handleRequestClose = () => {
+    if (saving) return;
+    if (dirty && !window.confirm("Discard unsaved changes to this city map?")) return;
+    onClose();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
-      <div className="glass-panel w-full max-w-6xl h-full max-h-[92vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-2 sm:p-6">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="city-map-title"
+        aria-busy={loading || saving}
+        className="glass-panel w-full max-w-6xl h-full max-h-[96vh] sm:max-h-[92vh] flex flex-col overflow-hidden"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") handleRequestClose();
+        }}
+      >
         <header className="px-5 py-4 border-b border-grove-600 flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-white">
+            <h2 id="city-map-title" className="text-lg font-semibold text-white">
               {city.name} - City Mapper
             </h2>
             <p className="text-xs text-slate-400">
               Live settlement plan · {externalConnections.length} world-road approach{externalConnections.length === 1 ? "" : "es"}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="secondary-button !px-3 !py-1.5"
-          >
-            Close
-          </button>
+          <div className="flex items-center gap-3">
+            <span className={`text-xs ${dirty ? "text-amber-300" : "text-emerald-300"}`} role="status">
+              {dirty ? "Unsaved changes" : "All changes saved"}
+            </span>
+            <button
+              type="button"
+              onClick={handleRequestClose}
+              disabled={saving}
+              className="secondary-button !px-3 !py-1.5 disabled:opacity-50"
+            >
+              Close
+            </button>
+          </div>
         </header>
-        <div className="flex-1 grid lg:grid-cols-2 overflow-hidden">
-          <div className="border-r border-grove-600 p-5 flex flex-col gap-3 overflow-hidden bg-grove-950/30">
-            {loading || !mapData ? (
-              <p className="text-sm text-slate-400">Loading city map...</p>
+        <div className="flex-1 min-h-0 overflow-y-auto lg:grid lg:grid-cols-2 lg:overflow-hidden">
+          <div className="min-h-[360px] lg:min-h-0 lg:border-r border-grove-600 p-3 sm:p-5 flex flex-col gap-3 overflow-hidden bg-grove-950/30">
+            {loading ? (
+              <div className="flex flex-1 items-center justify-center" role="status">
+                <p className="text-sm text-slate-400">Loading city map…</p>
+              </div>
+            ) : !mapData ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+                <p className="text-sm text-red-300">The city map could not be loaded.</p>
+                <button type="button" className="secondary-button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
+                  Try again
+                </button>
+              </div>
             ) : (
               <>
                 <svg
                   width={SVG_SIZE}
                   height={SVG_SIZE}
                   viewBox="0 0 1 1"
-                  className="w-full max-h-[520px] flex-1 bg-slate-950/60 border border-grove-600 rounded-2xl shadow-inner"
+                  role={placingBuilding ? "application" : "img"}
+                  aria-label={placingBuilding ? `Choose a position for ${placingBuilding.name}` : `Street and building plan for ${city.name}`}
+                  className={`w-full max-h-[520px] flex-1 bg-slate-950/60 border border-grove-600 rounded-2xl shadow-inner ${placingBuilding ? "cursor-crosshair ring-2 ring-amber-400/50" : ""}`}
                   onClick={handleSvgClick}
                 >
                   <defs>
@@ -363,7 +576,9 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                             ? "#38bdf8"
                             : building.kind === "market"
                             ? "#fcd34d"
-                          : "#ef4444"
+                            : building.kind === "utility"
+                            ? "#ef4444"
+                            : "#cbd5e1"
                         }
                         opacity={building.kind === "private" ? 0.72 : 1}
                         onClick={(event) => {
@@ -387,26 +602,29 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                   ))}
                 </svg>
                 {placingBuilding && (
-                  <p className="text-xs text-amber-300">
-                    Click to generate {placingBuilding.name} in the selected district.
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-amber-300">
+                    <span>Click the map to place {placingBuilding.name} exactly.</span>
+                    <button type="button" className="rounded border border-amber-500/50 px-2 py-1" onClick={placeInSelectedDistrict}>Place in {placingBuilding.district}</button>
+                    <button type="button" className="rounded border border-slate-600 px-2 py-1 text-slate-300" onClick={() => { setPlacingBuilding(null); setShowDistricts(false); setStatus("Building placement cancelled."); }}>Cancel</button>
+                  </div>
                 )}
               </>
             )}
           </div>
-          <div className="p-5 space-y-5 overflow-y-auto bg-grove-900/30">
-            {error && <p className="text-xs text-red-400">Error: {error}</p>}
+          <fieldset disabled={!mapData || loading || saving} className="p-3 sm:p-5 space-y-5 lg:overflow-y-auto bg-grove-900/30 disabled:opacity-70">
+            {error && <p role="alert" className="text-xs text-red-300 border border-red-900/60 bg-red-950/30 rounded px-3 py-2">{error}</p>}
             {status && (
-              <p className="text-xs text-sky-300 bg-sky-900/10 border border-sky-900 px-3 py-2 rounded">
+              <p role="status" className="text-xs text-sky-300 bg-sky-900/10 border border-sky-900 px-3 py-2 rounded">
                 {status}
               </p>
             )}
             <section className="space-y-2">
               <div className="flex items-center gap-2">
-                <label className="text-xs uppercase text-slate-400 tracking-wide">
+                <label htmlFor="city-size" className="text-xs uppercase text-slate-400 tracking-wide">
                   Size
                 </label>
                 <select
+                  id="city-size"
                   value={mapData?.size_label ?? "town"}
                   onChange={(e) => handleSizeChange(e.target.value as CitySize)}
                   className="rounded border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm"
@@ -418,6 +636,7 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                   ))}
                 </select>
                 <button
+                  type="button"
                   onClick={handleRandomizeRoads}
                   className="text-xs px-3 py-1.5 rounded border border-slate-600"
                 >
@@ -429,7 +648,7 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
               </p>
               <label className="flex items-center gap-3 text-xs text-slate-400">
                 Settlement scale
-                <input type="range" min={0.6} max={2} step={0.1} value={mapData?.scale ?? 1} onChange={(e) => handleScaleChange(Number(e.target.value))} />
+                <input aria-label="Settlement scale" type="range" min={0.6} max={2} step={0.1} value={mapData?.scale ?? 1} onChange={(e) => handleScaleChange(Number(e.target.value))} />
                 <span>{(mapData?.scale ?? 1).toFixed(1)}x</span>
               </label>
               <div className="grid grid-cols-2 gap-2 text-xs">
@@ -439,7 +658,7 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                   </select>
                 </label>
                 <label className="space-y-1 text-slate-400">Road names
-                  <select className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-2" value={mapData?.road_theme ?? "elvish"} onChange={(e) => regenerateLayout((mapData?.road_architecture ?? "ring") as RoadArchitecture, e.target.value as RoadTheme)}>
+                  <select className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-2" value={mapData?.road_theme ?? "elvish"} onChange={(e) => handleThemeChange(e.target.value as RoadTheme)}>
                     {ROAD_THEMES.map((theme) => <option key={theme.key} value={theme.key}>{theme.category}: {theme.label}</option>)}
                   </select>
                 </label>
@@ -452,12 +671,14 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
               </h3>
               <div className="flex gap-2 text-sm flex-wrap">
                 <input
+                  aria-label="Building name"
                   className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2"
                   placeholder="Building name"
                   value={buildingName}
                   onChange={(e) => setBuildingName(e.target.value)}
                 />
                 <select
+                  aria-label="Building type"
                   className="rounded border border-slate-700 bg-slate-900 px-2 py-2 text-xs"
                   value={buildingKind}
                   onChange={(e) =>
@@ -471,10 +692,11 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                   ))}
                 </select>
                 <button
+                  type="button"
                   onClick={() => {
                     if (!buildingName.trim()) return;
                     setPlacingBuilding({
-                      name: buildingName.trim(),
+                      name: buildingName.trim().slice(0, 120),
                       kind: buildingKind,
                       role: specialType,
                       district,
@@ -489,18 +711,21 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
               </div>
               <div className="flex items-center justify-between rounded-lg border border-grove-700 bg-grove-800/40 px-3 py-2 text-xs">
                 <span>{mapData?.districts?.length ?? 0} location districts</span>
-                <div className="flex gap-2"><button type="button" onClick={() => setShowDistricts((value) => !value)} className="text-brand-glow">{showDistricts ? "Hide overlay" : "Show overlay"}</button><button type="button" onClick={() => setMapData((current) => current ? { ...current, districts: generateDistricts(current.size_label, current.scale ?? 1, current.road_architecture ?? "ring") } : current)} className="text-earth-sand">Regenerate</button><button type="button" onClick={() => setMapData((current) => current ? { ...current, districts: [] } : current)} className="text-red-300">Remove</button></div>
+                <div className="flex gap-2"><button type="button" onClick={() => setShowDistricts((value) => !value)} className="text-brand-glow">{showDistricts ? "Hide overlay" : "Show overlay"}</button><button type="button" onClick={() => applyEdit((current) => ({ ...current, districts: generateDistricts(current.size_label, current.scale ?? 1, current.road_architecture ?? "ring") }))} className="text-earth-sand">Regenerate</button><button type="button" onClick={() => applyEdit((current) => ({ ...current, districts: [] }))} className="text-red-300">Remove</button></div>
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs">
-                <select className="rounded border border-slate-700 bg-slate-900 px-2 py-2" value={specialType} onChange={(e) => setSpecialType(e.target.value)}>
+                <select aria-label="Special building role" className="rounded border border-slate-700 bg-slate-900 px-2 py-2" value={specialType} onChange={(e) => setSpecialType(e.target.value)}>
                   {SPECIAL_TYPES.map((type) => <option key={type}>{type}</option>)}
                 </select>
-                <select className="rounded border border-slate-700 bg-slate-900 px-2 py-2" value={district} onChange={(e) => setDistrict(e.target.value as District)}>
+                <select aria-label="Building district" className="rounded border border-slate-700 bg-slate-900 px-2 py-2" value={district} onChange={(e) => setDistrict(e.target.value as District)}>
                   <option value="centre">City centre</option><option value="midtown">Midtown</option><option value="edge">Edge</option><option value="outskirts">Outskirts</option>
                 </select>
               </div>
+              <p className="text-[11px] text-slate-500">
+                {mapData?.buildings.length ?? 0} total buildings · {namedBuildings.length} named or assigned
+              </p>
               <ul className="space-y-1 text-xs text-slate-300 max-h-28 overflow-y-auto pr-1">
-                {mapData?.buildings.map((building) => (
+                {namedBuildings.map((building) => (
                   <li
                     key={building.id}
                     className="flex items-center justify-between border border-slate-800 rounded px-2 py-1"
@@ -509,6 +734,7 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                       {building.name} - {building.role ?? building.kind}{building.district ? ` (${building.district})` : ""}
                     </span>
                     <button
+                      type="button"
                       className="text-[10px] text-red-300"
                       onClick={() => removeBuilding(building.id)}
                     >
@@ -516,8 +742,9 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                     </button>
                   </li>
                 ))}
+                {!namedBuildings.length && <li className="text-slate-500">No named buildings yet.</li>}
               </ul>
-              {selectedResidenceId && <div className="flex gap-2 rounded border border-slate-700 p-2 text-xs"><input className="flex-1 rounded bg-slate-950 px-2 py-1" placeholder="NPC or household tag" value={residentTag} onChange={(e) => setResidentTag(e.target.value)} /><button onClick={saveResidentTag} className="rounded bg-sky-600 px-2">Save tag</button></div>}
+              {selectedResidenceId && <div className="flex gap-2 rounded border border-slate-700 p-2 text-xs"><input aria-label="Resident or household tag" className="flex-1 rounded bg-slate-950 px-2 py-1" placeholder="NPC or household tag" value={residentTag} onChange={(e) => setResidentTag(e.target.value)} /><button type="button" onClick={saveResidentTag} className="rounded bg-sky-600 px-2">Save tag</button><button type="button" onClick={() => { setSelectedResidenceId(null); setResidentTag(""); }} className="rounded border border-slate-600 px-2">Cancel</button></div>}
             </section>
 
             <section className="space-y-2">
@@ -537,10 +764,22 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                       <span>{road.points.length} pts</span>
                     </summary>
                     <div className="px-3 py-2 space-y-2 text-[11px] text-slate-400">
-                      {road.points.map((point) => (
-                        <div key={point.id} className="grid grid-cols-2 gap-2">
+                      <label className="flex flex-col gap-1">
+                        Road name
+                        <input
+                          className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200"
+                          value={road.name}
+                          maxLength={120}
+                          onChange={(event) => applyEdit((current) => ({
+                            ...current,
+                            roads: current.roads.map((item) => item.id === road.id ? { ...item, name: event.target.value } : item),
+                          }))}
+                        />
+                      </label>
+                      {road.points.map((point, pointIndex) => (
+                        <div key={point.id} className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
                           <label className="flex flex-col gap-1">
-                            X
+                            Point {pointIndex + 1} X
                             <input
                               type="range"
                               min={0}
@@ -555,7 +794,7 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                             />
                           </label>
                           <label className="flex flex-col gap-1">
-                            Y
+                            Point {pointIndex + 1} Y
                             <input
                               type="range"
                               min={0}
@@ -569,14 +808,25 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
                               }
                             />
                           </label>
+                          <button
+                            type="button"
+                            aria-label={`Remove waypoint ${pointIndex + 1} from ${road.name}`}
+                            disabled={road.points.length <= 2}
+                            onClick={() => removeRoadPoint(road.id, point.id)}
+                            className="rounded border border-red-900/60 px-2 py-1 text-red-300 disabled:opacity-30"
+                          >
+                            Remove
+                          </button>
                         </div>
                       ))}
-                      <button
-                        onClick={() => addRoadPoint(road.id)}
-                        className="text-[10px] text-sky-300"
-                      >
-                        + Add waypoint
-                      </button>
+                      <div className="flex items-center justify-between gap-2">
+                        <button type="button" onClick={() => addRoadPoint(road.id)} className="text-[10px] text-sky-300">
+                          + Add waypoint
+                        </button>
+                        <button type="button" onClick={() => { if (window.confirm(`Remove ${road.name}?`)) removeRoad(road.id); }} className="text-[10px] text-red-300">
+                          Remove road
+                        </button>
+                      </div>
                     </div>
                   </details>
                 ))}
@@ -584,17 +834,18 @@ export function CityMapEditor({ city, externalConnections = [], onClose }: Props
             </section>
             <div className="flex justify-between items-center">
               <button
+                type="button"
                 onClick={handleSave}
-                disabled={saving}
+                disabled={saving || !dirty}
                 className="px-4 py-2 rounded bg-sky-600 text-sm disabled:opacity-50"
               >
-                {saving ? "Saving..." : "Save city map"}
+                {saving ? "Saving…" : dirty ? "Save city map" : "Saved"}
               </button>
               <p className="text-[10px] text-slate-500">
-                Roads render as editable curves. Drag sliders to adjust control points.
+                Roads render as editable paths. Drag sliders to adjust waypoints.
               </p>
             </div>
-          </div>
+          </fieldset>
         </div>
       </div>
     </div>

@@ -1,13 +1,32 @@
-﻿import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useBlocker, useParams } from "react-router-dom";
+import { getErrorMessage } from "../../api/client";
 import {
-  listWorldTemplates,
-  type TemplateType,
-  type WorldTemplate,
-} from "../../api/templates";
+  createWorldEntry,
+  deleteWorldEntry,
+  listWorldEntries,
+  updateWorldEntry,
+  WORLD_ENTRY_CATEGORIES,
+  type WorldEntry,
+  type WorldEntryCategory,
+} from "../../api/worldEntries";
+import { listWorldTemplates, type TemplateType, type WorldTemplate } from "../../api/templates";
 
-type ParsedTemplate = WorldTemplate & { definition: any };
-type WikiEntry = {
+type JsonRecord = Record<string, unknown>;
+type ParsedTemplate = WorldTemplate & {
+  definition: JsonRecord;
+  definitionValid: boolean;
+};
+
+type EntryFormState = {
+  title: string;
+  summary: string;
+  body: string;
+  tags: string;
+  category: WorldEntryCategory;
+};
+
+type LegacyWikiEntry = {
   id: string;
   title: string;
   summary: string;
@@ -17,416 +36,727 @@ type WikiEntry = {
 };
 
 const TEMPLATE_HEADINGS: Record<TemplateType, string> = {
-  character: "Character",
+  character: "Character sheet",
   npc: "NPC templates",
-  item: "Item",
-  ability: "Ability",
+  item: "Item templates",
+  ability: "Ability templates",
   custom_entity: "Custom entities",
 };
 
 const TEMPLATE_DESCRIPTIONS: Record<TemplateType, string> = {
-  character: "Shared playable sheet locked at world creation.",
-  npc: "Reusable archetypes to drop into scenes.",
-  item: "Structured equipment write-ups.",
-  ability: "Abilities, spells, or combat maneuvers.",
-  custom_entity: "Factions, elements, or bespoke lore tags.",
+  character: "The shared playable sheet defined for this world.",
+  npc: "Reusable archetypes for people, creatures, and scene roles.",
+  item: "Structured equipment and relic blueprints.",
+  ability: "Abilities, spells, and combat-move blueprints.",
+  custom_entity: "Bespoke structures such as factions, elements, or schools.",
 };
 
-const FILTER_OPTIONS: Array<TemplateType | "note" | "all"> = [
-  "all",
-  "character",
-  "npc",
-  "item",
-  "ability",
-  "custom_entity",
-  "note",
-];
+const CATEGORY_INFO: Record<WorldEntryCategory, { label: string; description: string }> = {
+  note: { label: "General note", description: "A flexible fact, person, event, or table reference." },
+  magic_system: { label: "Magic system", description: "Rules, sources, costs, and limits of magic." },
+  item_type: { label: "Item or relic", description: "Equipment families, materials, artifacts, and relics." },
+  character_template: { label: "Character archetype", description: "Cultures, roles, ancestries, and character concepts." },
+  faction: { label: "Faction", description: "Organizations, alliances, and political groups." },
+  region: { label: "Region or place", description: "Continents, territories, landmarks, and settlements." },
+};
 
-const defaultFormState = {
+const makeEmptyForm = (): EntryFormState => ({
   title: "",
   summary: "",
+  body: "",
   tags: "",
-  templateType: "note" as TemplateType | "note",
+  category: "note",
+});
+
+const asRecord = (value: unknown): JsonRecord | null =>
+  value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
+
+const readString = (value: unknown, fallback = "") => (typeof value === "string" ? value : fallback);
+
+const normalizeTags = (raw: string | string[]) => {
+  const values = Array.isArray(raw) ? raw : raw.split(",");
+  const seen = new Set<string>();
+  return values.flatMap((value) => {
+    if (typeof value !== "string") return [];
+    const tag = value.trim().replace(/^#/, "");
+    const key = tag.toLocaleLowerCase();
+    if (!tag || seen.has(key)) return [];
+    seen.add(key);
+    return [tag];
+  });
+};
+
+const parseMetadata = (raw: string): JsonRecord => {
+  try {
+    return asRecord(JSON.parse(raw || "{}")) ?? {};
+  } catch {
+    return {};
+  }
+};
+
+const getEntryTags = (entry: WorldEntry) => {
+  const tags = parseMetadata(entry.metadata_json).tags;
+  return Array.isArray(tags) ? normalizeTags(tags.filter((tag): tag is string => typeof tag === "string")) : [];
+};
+
+const serializeMetadata = (tags: string[], extra: JsonRecord = {}) => JSON.stringify({ ...extra, tags });
+
+const parseTemplate = (template: WorldTemplate): ParsedTemplate => {
+  try {
+    const parsed = asRecord(JSON.parse(template.definition_json || "{}"));
+    return { ...template, definition: parsed ?? {}, definitionValid: Boolean(parsed) };
+  } catch {
+    return { ...template, definition: {}, definitionValid: false };
+  }
+};
+
+const parseLegacyEntries = (raw: string | null): LegacyWikiEntry[] => {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const entries = parsed.flatMap((candidate): LegacyWikiEntry[] => {
+      const entry = asRecord(candidate);
+      if (!entry || typeof entry.id !== "string" || typeof entry.title !== "string") return [];
+      const validTemplateTypes = ["character", "npc", "item", "ability", "custom_entity", "note"];
+      const templateType = validTemplateTypes.includes(String(entry.templateType))
+        ? (entry.templateType as TemplateType | "note")
+        : "note";
+      return [
+        {
+          id: entry.id,
+          title: entry.title,
+          summary: readString(entry.summary),
+          tags: Array.isArray(entry.tags)
+            ? normalizeTags(entry.tags.filter((tag): tag is string => typeof tag === "string"))
+            : [],
+          templateType,
+          updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : Date.now(),
+        },
+      ];
+    });
+    const seen = new Set<string>();
+    return entries.filter((entry) => {
+      if (seen.has(entry.id)) return false;
+      seen.add(entry.id);
+      return true;
+    });
+  } catch {
+    return [];
+  }
+};
+
+const legacyCategory = (type: LegacyWikiEntry["templateType"]): WorldEntryCategory => {
+  if (type === "character") return "character_template";
+  if (type === "item") return "item_type";
+  return "note";
+};
+
+const renderDefinitionRows = (template: ParsedTemplate): ReactNode => {
+  if (!template.definitionValid) {
+    return <p className="status-error">This template contains invalid JSON.</p>;
+  }
+
+  if (template.template_type === "npc") {
+    return (
+      <dl className="grid gap-1 text-xs text-slate-300">
+        <div><dt className="inline text-slate-500">Role: </dt><dd className="inline">{readString(template.definition.role, "Not specified")}</dd></div>
+        <div><dt className="inline text-slate-500">Notes: </dt><dd className="inline whitespace-pre-wrap">{readString(template.definition.notes, "None")}</dd></div>
+      </dl>
+    );
+  }
+
+  const key = template.template_type === "character" ? "features" : "fields";
+  const rows = Array.isArray(template.definition[key]) ? template.definition[key] : [];
+  if (rows.length === 0) return <p className="text-xs text-slate-500">No fields defined.</p>;
+
+  return (
+    <ul className="space-y-1 text-xs text-slate-300">
+      {rows.map((row, index) => {
+        const value = asRecord(row) ?? {};
+        const label = readString(value.label, `Field ${index + 1}`);
+        const type = readString(value.type || value.inputType, "text").replace(/_/g, " ");
+        return (
+          <li key={readString(value.id, `${template.id}-${index}`)} className="flex justify-between gap-3 border-b border-slate-800/70 py-1 last:border-0">
+            <span>{label}</span>
+            <span className="text-slate-500">{type}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
 };
 
 export function WorldIndexPage() {
   const { worldId } = useParams();
+  const editorRef = useRef<HTMLElement>(null);
   const [templates, setTemplates] = useState<ParsedTemplate[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [templatesLoading, setTemplatesLoading] = useState(Boolean(worldId));
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+  const [templateReloadKey, setTemplateReloadKey] = useState(0);
+
+  const [entries, setEntries] = useState<WorldEntry[]>([]);
+  const [entriesLoading, setEntriesLoading] = useState(Boolean(worldId));
+  const [entriesLoadFailed, setEntriesLoadFailed] = useState(false);
+  const [entriesError, setEntriesError] = useState<string | null>(null);
+  const [entryReloadKey, setEntryReloadKey] = useState(0);
+  const [message, setMessage] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [filter, setFilter] = useState<TemplateType | "note" | "all">("all");
-  const [wikiEntries, setWikiEntries] = useState<WikiEntry[]>([]);
-  const [editingEntry, setEditingEntry] = useState<WikiEntry | null>(null);
-  const [formState, setFormState] = useState(defaultFormState);
+  const [filter, setFilter] = useState<WorldEntryCategory | "all">("all");
+  const [editingEntry, setEditingEntry] = useState<WorldEntry | null>(null);
+  const [formState, setFormState] = useState<EntryFormState>(() => makeEmptyForm());
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const [legacyEntries, setLegacyEntries] = useState<LegacyWikiEntry[]>([]);
+  const [legacyDismissed, setLegacyDismissed] = useState(false);
+  const [importingLegacy, setImportingLegacy] = useState(false);
 
   useEffect(() => {
-    if (!worldId) return;
-    setLoading(true);
+    if (!worldId) {
+      setTemplates([]);
+      setTemplatesLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setTemplatesLoading(true);
+    setTemplatesError(null);
     listWorldTemplates(worldId)
       .then((data) => {
-        setTemplates(
-          data.map((template) => {
-            let definition: any = {};
-            try {
-              definition = JSON.parse(template.definition_json);
-            } catch {
-              definition = {};
-            }
-            return { ...template, definition };
-          })
-        );
-        setError(null);
+        if (!cancelled) setTemplates(data.map(parseTemplate));
       })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, [worldId]);
+      .catch((error) => {
+        if (!cancelled) setTemplatesError(getErrorMessage(error, "We couldn't load template references."));
+      })
+      .finally(() => {
+        if (!cancelled) setTemplatesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [templateReloadKey, worldId]);
 
   useEffect(() => {
-    if (!worldId) return;
+    if (!worldId) {
+      setEntries([]);
+      setEntriesLoading(false);
+      setEntriesLoadFailed(true);
+      setEntriesError("This page needs a valid world.");
+      return;
+    }
+    let cancelled = false;
+    setEntriesLoading(true);
+    setEntriesLoadFailed(false);
+    setEntriesError(null);
+    listWorldEntries(worldId)
+      .then((data) => {
+        if (!cancelled) setEntries(data);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setEntriesLoadFailed(true);
+          setEntriesError(getErrorMessage(error, "We couldn't load the world index."));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setEntriesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [entryReloadKey, worldId]);
+
+  useEffect(() => {
+    setEditingEntry(null);
+    setFormState(makeEmptyForm());
+    setMessage(null);
+    setLegacyDismissed(false);
+    if (!worldId) {
+      setLegacyEntries([]);
+      return;
+    }
     try {
-      const raw = localStorage.getItem(`wiki_entries_${worldId}`);
-      if (raw) {
-        const parsed = JSON.parse(raw) as WikiEntry[];
-        setWikiEntries(parsed);
-      } else {
-        setWikiEntries([]);
-      }
+      setLegacyEntries(parseLegacyEntries(localStorage.getItem(`wiki_entries_${worldId}`)));
     } catch {
-      setWikiEntries([]);
+      setLegacyEntries([]);
     }
   }, [worldId]);
 
-  useEffect(() => {
-    if (!worldId) return;
-    localStorage.setItem(`wiki_entries_${worldId}`, JSON.stringify(wikiEntries));
-  }, [wikiEntries, worldId]);
+  const importedLegacyIds = useMemo(() => {
+    const ids = new Set<string>();
+    entries.forEach((entry) => {
+      const id = parseMetadata(entry.metadata_json).legacyLocalId;
+      if (typeof id === "string") ids.add(id);
+    });
+    return ids;
+  }, [entries]);
 
-  const grouped = useMemo(() => {
-    const base: Record<TemplateType, ParsedTemplate[]> = {
+  const pendingLegacyEntries = useMemo(
+    () => legacyEntries.filter((entry) => !importedLegacyIds.has(entry.id)),
+    [importedLegacyIds, legacyEntries]
+  );
+
+  const groupedTemplates = useMemo(() => {
+    const grouped: Record<TemplateType, ParsedTemplate[]> = {
       character: [],
       npc: [],
       item: [],
       ability: [],
       custom_entity: [],
     };
-    templates.forEach((template) => {
-      const key = template.template_type as TemplateType;
-      if (base[key]) {
-        base[key].push(template);
-      }
-    });
-    return base;
+    templates.forEach((template) => grouped[template.template_type]?.push(template));
+    return grouped;
   }, [templates]);
 
-  const templateMatches = useMemo(() => {
-    if (!searchTerm.trim()) return grouped;
-    const query = searchTerm.toLowerCase();
-    const base: Record<TemplateType, ParsedTemplate[]> = {
+  const normalizedSearch = searchTerm.trim().toLocaleLowerCase();
+
+  const filteredEntries = useMemo(
+    () =>
+      entries.filter((entry) => {
+        if (filter !== "all" && entry.category !== filter) return false;
+        if (!normalizedSearch) return true;
+        const haystack = `${entry.title} ${entry.summary} ${entry.body} ${getEntryTags(entry).join(" ")}`.toLocaleLowerCase();
+        return haystack.includes(normalizedSearch);
+      }),
+    [entries, filter, normalizedSearch]
+  );
+
+  const filteredTemplates = useMemo(() => {
+    if (!normalizedSearch) return groupedTemplates;
+    const result: Record<TemplateType, ParsedTemplate[]> = {
       character: [],
       npc: [],
       item: [],
       ability: [],
       custom_entity: [],
     };
-    (Object.keys(grouped) as TemplateType[]).forEach((type) => {
-      base[type] = grouped[type].filter((template) => {
-        const haystack = `${template.name} ${JSON.stringify(template.definition ?? {})}`.toLowerCase();
-        return haystack.includes(query);
-      });
-    });
-    return base;
-  }, [grouped, searchTerm]);
-
-  const filteredEntries = useMemo(() => {
-    const query = searchTerm.toLowerCase();
-    return wikiEntries.filter((entry) => {
-      const matchesFilter =
-        filter === "all" || entry.templateType === filter;
-      const haystack = `${entry.title} ${entry.summary} ${entry.tags.join(" ")}`.toLowerCase();
-      return matchesFilter && (query.length === 0 || haystack.includes(query));
-    });
-  }, [wikiEntries, searchTerm, filter]);
-
-  const handleSaveEntry = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const title = formState.title.trim();
-    const summary = formState.summary.trim();
-    if (!title || !summary) return;
-    const tags = formState.tags
-      .split(",")
-      .map((tag) => tag.trim())
-      .filter(Boolean);
-
-    if (editingEntry) {
-      setWikiEntries((prev) =>
-        prev.map((entry) =>
-          entry.id === editingEntry.id
-            ? {
-                ...entry,
-                title,
-                summary,
-                tags,
-                templateType: formState.templateType,
-                updatedAt: Date.now(),
-              }
-            : entry
-        )
+    (Object.keys(groupedTemplates) as TemplateType[]).forEach((type) => {
+      result[type] = groupedTemplates[type].filter((template) =>
+        `${template.name} ${JSON.stringify(template.definition)}`.toLocaleLowerCase().includes(normalizedSearch)
       );
-    } else {
-      setWikiEntries((prev) => [
-        {
-          id: crypto.randomUUID(),
-          title,
-          summary,
-          tags,
-          templateType: formState.templateType,
-          updatedAt: Date.now(),
-        },
-        ...prev,
-      ]);
-    }
+    });
+    return result;
+  }, [groupedTemplates, normalizedSearch]);
 
-    setFormState(defaultFormState);
+  const originalFormState = useMemo<EntryFormState | null>(() => {
+    if (!editingEntry) return null;
+    return {
+      title: editingEntry.title,
+      summary: editingEntry.summary,
+      body: editingEntry.body,
+      tags: getEntryTags(editingEntry).join(", "),
+      category: editingEntry.category,
+    };
+  }, [editingEntry]);
+
+  const formDirty = editingEntry
+    ? Boolean(
+        originalFormState &&
+          (formState.title !== originalFormState.title ||
+            formState.summary !== originalFormState.summary ||
+            formState.body !== originalFormState.body ||
+            formState.category !== originalFormState.category ||
+            normalizeTags(formState.tags).join("\u0000") !== normalizeTags(originalFormState.tags).join("\u0000"))
+      )
+    : Boolean(formState.title || formState.summary || formState.body || formState.tags || formState.category !== "note");
+
+  const blocker = useBlocker(formDirty && !saving);
+  useEffect(() => {
+    if (blocker.state !== "blocked") return;
+    if (window.confirm("Discard the unsaved index entry and leave this page?")) blocker.proceed();
+    else blocker.reset();
+  }, [blocker]);
+
+  const resetEditor = () => {
     setEditingEntry(null);
+    setFormState(makeEmptyForm());
   };
 
-  const handleEditEntry = (entry: WikiEntry) => {
+  const confirmDiscard = () =>
+    !formDirty || window.confirm("Discard your unsaved changes to this index entry?");
+
+  const handleSaveEntry = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!worldId || saving) return;
+    const title = formState.title.trim();
+    if (!title) {
+      setEntriesError("Entry title is required.");
+      return;
+    }
+
+    const tags = normalizeTags(formState.tags);
+    setSaving(true);
+    setEntriesError(null);
+    setMessage(null);
+    try {
+      if (editingEntry) {
+        const updated = await updateWorldEntry(
+          editingEntry.id,
+          formState.category,
+          title,
+          formState.summary.trim(),
+          formState.body.trim(),
+          serializeMetadata(tags)
+        );
+        setEntries((current) => current.map((entry) => (entry.id === updated.id ? updated : entry)));
+        setMessage(`“${updated.title}” was updated.`);
+      } else {
+        const created = await createWorldEntry(
+          worldId,
+          formState.category,
+          title,
+          formState.summary.trim(),
+          formState.body.trim(),
+          serializeMetadata(tags)
+        );
+        setEntries((current) => [created, ...current]);
+        setMessage(`“${created.title}” was added to the index.`);
+      }
+      resetEditor();
+    } catch (error) {
+      setEntriesError(getErrorMessage(error, "We couldn't save that index entry."));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEditEntry = (entry: WorldEntry) => {
+    if (editingEntry?.id === entry.id) return;
+    if (!confirmDiscard()) return;
     setEditingEntry(entry);
     setFormState({
       title: entry.title,
       summary: entry.summary,
-      tags: entry.tags.join(", "),
-      templateType: entry.templateType,
+      body: entry.body,
+      tags: getEntryTags(entry).join(", "),
+      category: entry.category,
     });
+    setEntriesError(null);
+    setMessage(null);
+    requestAnimationFrame(() => editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
-  const handleDeleteEntry = (entryId: string) => {
-    setWikiEntries((prev) => prev.filter((entry) => entry.id !== entryId));
-    if (editingEntry?.id === entryId) {
-      setEditingEntry(null);
-      setFormState(defaultFormState);
+  const handleDeleteEntry = async (entry: WorldEntry) => {
+    if (deletingId || saving) return;
+    if (!window.confirm(`Delete “${entry.title}”? This cannot be undone.`)) return;
+    setDeletingId(entry.id);
+    setEntriesError(null);
+    setMessage(null);
+    try {
+      await deleteWorldEntry(entry.id);
+      setEntries((current) => current.filter((candidate) => candidate.id !== entry.id));
+      if (editingEntry?.id === entry.id) resetEditor();
+      setMessage(`“${entry.title}” was deleted.`);
+    } catch (error) {
+      setEntriesError(getErrorMessage(error, "We couldn't delete that index entry."));
+    } finally {
+      setDeletingId(null);
     }
   };
 
+  const handleImportLegacy = async () => {
+    if (!worldId || importingLegacy || entriesLoading || entriesLoadFailed || pendingLegacyEntries.length === 0) return;
+    setImportingLegacy(true);
+    setEntriesError(null);
+    setMessage(null);
+    const imported: WorldEntry[] = [];
+    let remaining: LegacyWikiEntry[] = [];
+
+    for (let index = 0; index < pendingLegacyEntries.length; index += 1) {
+      const legacy = pendingLegacyEntries[index];
+      try {
+        const created = await createWorldEntry(
+          worldId,
+          legacyCategory(legacy.templateType),
+          legacy.title.trim() || "Untitled legacy note",
+          legacy.summary.trim(),
+          "",
+          serializeMetadata(legacy.tags, {
+            legacyLocalId: legacy.id,
+            legacyTemplateType: legacy.templateType,
+            legacyUpdatedAt: legacy.updatedAt,
+          })
+        );
+        imported.push(created);
+      } catch (error) {
+        remaining = pendingLegacyEntries.slice(index);
+        setEntriesError(getErrorMessage(error, "The legacy-note import stopped before it finished."));
+        break;
+      }
+    }
+
+    if (imported.length > 0) setEntries((current) => [...imported.reverse(), ...current]);
+    try {
+      const storageKey = `wiki_entries_${worldId}`;
+      if (remaining.length === 0) localStorage.removeItem(storageKey);
+      else localStorage.setItem(storageKey, JSON.stringify(remaining));
+    } catch {
+      setEntriesError("Notes were imported, but the legacy browser copy could not be cleared. Imported IDs will prevent duplicates.");
+    }
+    setLegacyEntries(remaining);
+    if (remaining.length === 0) setMessage(`${imported.length} legacy note${imported.length === 1 ? " was" : "s were"} imported into SQLite.`);
+    setImportingLegacy(false);
+  };
+
   if (!worldId) {
-    return <p className="text-sm text-red-400">World not found.</p>;
+    return <p className="status-error" role="alert">This page needs a valid world.</p>;
   }
 
-  const templateData = searchTerm.trim() ? templateMatches : grouped;
-
   return (
-    <div className="h-full w-full flex flex-col space-y-5 overflow-hidden">
-      <header className="page-header shrink-0"><div><p className="section-label">Campaign codex</p><h2 className="page-title mt-1">World index</h2><p className="page-description mt-2">
-          Keep a diegetic wiki of factions, relics, and NPCs while referencing locked-in templates.
-        </p></div></header>
+    <div className="page-shell max-w-7xl">
+      <header className="page-header">
+        <div>
+          <p className="section-label">Campaign codex</p>
+          <h1 className="page-title mt-1">World index</h1>
+          <p className="page-description mt-2">
+            Build a searchable reference for places, factions, systems, relics, and table notes.
+          </p>
+        </div>
+      </header>
 
-      {error && <p className="text-sm text-red-400">Error: {error}</p>}
-      {loading && <p className="text-xs text-earth-sand/70">Loading template definitions...</p>}
-
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <input
-          className="input-field"
-          placeholder="Search wiki entries or templates"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
-        <select
-          className="rounded-lg border border-grove-700 bg-grove-800 px-3 py-2 text-sm text-brand-glow"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value as TemplateType | "note" | "all")}
-        >
-          {FILTER_OPTIONS.map((option) => (
-            <option key={option} value={option}>
-              {option === "all" ? "All entries" : option === "note" ? "Wiki notes" : TEMPLATE_HEADINGS[option]}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="flex-1 grid gap-6 overflow-hidden lg:grid-cols-[2fr_1fr]">
-        <section className="glass-panel bg-grove-900/60 border border-grove-700 p-5 flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-brand-glow">Codex entries</h3>
-              <p className="text-xs text-earth-sand/70">
-                {filteredEntries.length} entry{filteredEntries.length === 1 ? "" : "ies"}
-              </p>
-            </div>
+      {!entriesLoading && !entriesLoadFailed && pendingLegacyEntries.length > 0 && !legacyDismissed && (
+        <section className="section-card border-amber-500/40 space-y-3" aria-labelledby="legacy-import-heading">
+          <div>
+            <h3 id="legacy-import-heading" className="text-sm font-semibold text-amber-200">Local notes found</h3>
+            <p className="mt-1 text-xs text-slate-400">
+              {pendingLegacyEntries.length} note{pendingLegacyEntries.length === 1 ? " is" : "s are"} stored in the older browser-only format. Import them into the campaign database so they are backed up with the rest of this world.
+            </p>
           </div>
-          <div className="mt-4 flex-1 overflow-y-auto pr-2 space-y-3">
-            {filteredEntries.length === 0 ? (
-              <p className="text-sm text-earth-sand/60">
-                No entries yet. Use the panel on the right to start documenting people, places, and items.
-              </p>
-            ) : (
-              filteredEntries.map((entry) => (
-                <article
-                  key={entry.id}
-                  className="rounded-2xl border border-grove-700 bg-grove-800/60 p-4 space-y-2"
-                >
-                  <div className="flex items-center justify-between text-[11px] text-earth-sand/70">
-                    <span>
-                      {entry.templateType === "note"
-                        ? "Lore note"
-                        : TEMPLATE_HEADINGS[entry.templateType]}
-                    </span>
-                    <span>{new Date(entry.updatedAt).toLocaleString()}</span>
-                  </div>
-                  <h4 className="text-lg font-semibold text-brand-glow">{entry.title}</h4>
-                  <p className="text-sm text-earth-sand/80">{entry.summary}</p>
-                  {entry.tags.length > 0 && (
-                    <p className="text-xs text-earth-sand/60">
-                      Tags: {entry.tags.map((tag) => `#${tag}`).join(" ")}
-                    </p>
-                  )}
-                  <div className="flex gap-3 text-[11px] text-earth-sand/70">
-                    <button onClick={() => handleEditEntry(entry)} className="hover:text-white">
-                      Edit
-                    </button>
-                    <button onClick={() => handleDeleteEntry(entry.id)} className="hover:text-earth-clay">
-                      Delete
-                    </button>
-                  </div>
-                </article>
-              ))
-            )}
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="primary-button text-xs" onClick={handleImportLegacy} disabled={importingLegacy}>
+              {importingLegacy ? "Importing…" : "Import notes"}
+            </button>
+            <button type="button" className="secondary-button text-xs" onClick={() => setLegacyDismissed(true)} disabled={importingLegacy}>
+              Not now
+            </button>
           </div>
         </section>
+      )}
 
-        <div className="space-y-6 overflow-y-auto pr-2">
-          <section className="glass-panel bg-grove-900/60 border border-grove-700 p-5 space-y-4">
-            <header className="space-y-1">
-              <h3 className="text-lg font-semibold text-brand-glow">
-                {editingEntry ? "Edit entry" : "New entry"}
-              </h3>
-              <p className="text-xs text-earth-sand/70">
-                Draft lore, items, or NPCs with tags for fast searching.
-              </p>
-            </header>
-            <form className="space-y-3" onSubmit={handleSaveEntry}>
+      <div aria-live="polite">
+        {entriesError && <p className="status-error" role="alert">{entriesError}</p>}
+        {message && <p className="status-success">{message}</p>}
+      </div>
+
+      <section className="section-card space-y-3" aria-label="Search and filter the world index">
+        <div className="grid gap-3 sm:grid-cols-[1fr_15rem]">
+          <div>
+            <label htmlFor="index-search" className="sr-only">Search index entries and templates</label>
+            <input
+              id="index-search"
+              type="search"
+              className="input-field"
+              placeholder="Search titles, body text, tags, or templates"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="index-filter" className="sr-only">Filter index entries by category</label>
+            <select
+              id="index-filter"
+              className="input-field"
+              value={filter}
+              onChange={(event) => setFilter(event.target.value as WorldEntryCategory | "all")}
+            >
+              <option value="all">All categories</option>
+              {WORLD_ENTRY_CATEGORIES.map((category) => (
+                <option key={category} value={category}>{CATEGORY_INFO[category].label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid items-start gap-6 lg:grid-cols-[2fr_1fr]">
+        <aside ref={editorRef} className="section-card space-y-4 lg:order-2 lg:sticky lg:top-4" aria-labelledby="index-editor-heading">
+          <header>
+            <h3 id="index-editor-heading" className="text-lg font-semibold text-slate-100">
+              {editingEntry ? "Edit index entry" : "New index entry"}
+            </h3>
+            <p className="mt-1 text-xs text-slate-500">Only the title is required; add detail now or grow the entry over time.</p>
+          </header>
+          <form className="space-y-3" onSubmit={handleSaveEntry}>
+            <div>
+              <label htmlFor="index-entry-title" className="block text-xs font-semibold text-slate-400 mb-1">Title <span aria-hidden="true">*</span></label>
               <input
+                id="index-entry-title"
                 className="input-field"
-                placeholder="Title"
                 value={formState.title}
-                onChange={(e) => setFormState((prev) => ({ ...prev, title: e.target.value }))}
+                maxLength={180}
+                required
+                onChange={(event) => setFormState((current) => ({ ...current, title: event.target.value }))}
               />
-              <textarea
-                className="input-field"
-                rows={4}
-                placeholder="Summary or lore snippet"
-                value={formState.summary}
-                onChange={(e) => setFormState((prev) => ({ ...prev, summary: e.target.value }))}
-              />
+            </div>
+            <div>
+              <label htmlFor="index-entry-category" className="block text-xs font-semibold text-slate-400 mb-1">Category</label>
               <select
-                className="rounded-lg border border-grove-700 bg-grove-800 px-3 py-2 text-sm text-brand-glow w-full"
-                value={formState.templateType}
-                onChange={(e) =>
-                  setFormState((prev) => ({
-                    ...prev,
-                    templateType: e.target.value as TemplateType | "note",
-                  }))
-                }
+                id="index-entry-category"
+                className="input-field"
+                value={formState.category}
+                onChange={(event) => setFormState((current) => ({ ...current, category: event.target.value as WorldEntryCategory }))}
               >
-                <option value="note">General lore note</option>
-                {(Object.keys(TEMPLATE_HEADINGS) as TemplateType[]).map((type) => (
-                  <option key={type} value={type}>
-                    Link to {TEMPLATE_HEADINGS[type]}
-                  </option>
+                {WORLD_ENTRY_CATEGORIES.map((category) => (
+                  <option key={category} value={category}>{CATEGORY_INFO[category].label}</option>
                 ))}
               </select>
-              <input
+              <p className="mt-1 text-[11px] text-slate-500">{CATEGORY_INFO[formState.category].description}</p>
+            </div>
+            <div>
+              <label htmlFor="index-entry-summary" className="block text-xs font-semibold text-slate-400 mb-1">Quick summary</label>
+              <textarea
+                id="index-entry-summary"
                 className="input-field"
-                placeholder="Tags (comma separated)"
-                value={formState.tags}
-                onChange={(e) => setFormState((prev) => ({ ...prev, tags: e.target.value }))}
+                rows={2}
+                maxLength={500}
+                value={formState.summary}
+                onChange={(event) => setFormState((current) => ({ ...current, summary: event.target.value }))}
               />
-              <div className="flex gap-2">
-                <button type="submit" className="primary-button text-sm">
-                  {editingEntry ? "Update entry" : "Add entry"}
+            </div>
+            <div>
+              <label htmlFor="index-entry-body" className="block text-xs font-semibold text-slate-400 mb-1">Full entry</label>
+              <textarea
+                id="index-entry-body"
+                className="input-field"
+                rows={8}
+                maxLength={20000}
+                placeholder="Write the detailed, table-ready reference here…"
+                value={formState.body}
+                onChange={(event) => setFormState((current) => ({ ...current, body: event.target.value }))}
+              />
+            </div>
+            <div>
+              <label htmlFor="index-entry-tags" className="block text-xs font-semibold text-slate-400 mb-1">Tags</label>
+              <input
+                id="index-entry-tags"
+                className="input-field"
+                placeholder="politics, session 4, unresolved"
+                value={formState.tags}
+                maxLength={500}
+                onChange={(event) => setFormState((current) => ({ ...current, tags: event.target.value }))}
+              />
+              <p className="mt-1 text-[11px] text-slate-500">Separate tags with commas.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="submit" className="primary-button" disabled={saving || !formState.title.trim()}>
+                {saving ? "Saving…" : editingEntry ? "Save changes" : "Add to index"}
+              </button>
+              {(editingEntry || formDirty) && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={saving}
+                  onClick={() => {
+                    if (confirmDiscard()) resetEditor();
+                  }}
+                >
+                  Cancel
                 </button>
-                {editingEntry && (
-                  <button
-                    type="button"
-                    className="secondary-button text-sm"
-                    onClick={() => {
-                      setEditingEntry(null);
-                      setFormState(defaultFormState);
-                    }}
-                  >
-                    Cancel
-                  </button>
-                )}
-              </div>
-            </form>
-          </section>
+              )}
+            </div>
+          </form>
+        </aside>
 
-          <section className="glass-panel bg-grove-900/60 border border-grove-700 p-5 space-y-4 max-h-[55vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-brand-glow">Template reference</h3>
-            {(Object.keys(templateData) as TemplateType[]).map((type) => (
-              <article key={type} className="space-y-2 border border-grove-700/60 rounded-2xl p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-brand-glow">
-                      {TEMPLATE_HEADINGS[type]}
-                    </p>
-                    <p className="text-[11px] text-earth-sand/70">{TEMPLATE_DESCRIPTIONS[type]}</p>
-                  </div>
-                  <span className="text-xs text-earth-sand/60">
-                    {templateData[type].length} stored
-                  </span>
-                </div>
-                {templateData[type].length === 0 ? (
-                  <p className="text-xs text-earth-sand/60">No templates persisted yet.</p>
-                ) : (
-                  templateData[type].map((template) => (
-                    <div key={template.id} className="rounded-xl bg-grove-800/50 border border-grove-700/60 p-3 space-y-2">
-                      <div className="flex items-center justify-between text-xs text-earth-sand/70">
-                        <span className="text-brand-glow">{template.name}</span>
-                        <span>{new Date(template.created_at * 1000).toLocaleDateString()}</span>
+        <section className="section-card space-y-4 lg:order-1" aria-labelledby="codex-entries-heading">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 id="codex-entries-heading" className="text-lg font-semibold text-slate-100">Codex entries</h3>
+              {!entriesLoading && <p className="text-xs text-slate-500">{filteredEntries.length} shown · {entries.length} total</p>}
+            </div>
+            {entriesLoadFailed && (
+              <button type="button" className="secondary-button text-xs" onClick={() => setEntryReloadKey((key) => key + 1)}>Reload entries</button>
+            )}
+          </div>
+
+          {entriesLoading ? (
+            <p className="text-sm text-slate-400" role="status">Loading index entries…</p>
+          ) : filteredEntries.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              {entries.length === 0 ? "No index entries yet. Use the editor to create the first one." : "No entries match the current search and category."}
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {filteredEntries.map((entry) => {
+                const tags = getEntryTags(entry);
+                return (
+                  <article key={entry.id} className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 space-y-3">
+                    <header className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-300">{CATEGORY_INFO[entry.category]?.label ?? entry.category}</p>
+                        <h4 className="mt-1 text-lg font-semibold text-slate-100">{entry.title}</h4>
                       </div>
-                      {type === "character" && (
-                        <ul className="text-xs text-earth-sand/80 space-y-1">
-                          {template.definition.features?.map((feature: any) => (
-                            <li key={feature.id} className="flex justify-between gap-2">
-                              <span>{feature.label}</span>
-                              <span className="text-earth-sand/60">{feature.type}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      {type === "npc" && (
-                        <p className="text-xs text-earth-sand/80">
-                          Role: <span className="text-brand-glow">{template.definition.role || "Unknown"}</span>
-                          <br />
-                          Notes: {template.definition.notes || "n/a"}
-                        </p>
-                      )}
-                      {type !== "character" && type !== "npc" && type !== "custom_entity" && (
-                        <ul className="text-xs text-earth-sand/80 space-y-1">
-                          {template.definition.fields?.map((field: any) => (
-                            <li key={field.id} className="flex justify-between gap-2">
-                              <span>{field.label}</span>
-                              <span className="text-earth-sand/60">{field.inputType}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      {type === "custom_entity" && (
-                        <ul className="text-xs text-earth-sand/80 space-y-1">
-                          {template.definition.fields?.map((field: any) => (
-                            <li key={field.id}>{field.label}</li>
-                          ))}
-                        </ul>
-                      )}
+                      <time className="shrink-0 text-[11px] text-slate-500" dateTime={new Date(entry.created_at * 1000).toISOString()}>
+                        {new Date(entry.created_at * 1000).toLocaleDateString()}
+                      </time>
+                    </header>
+                    {entry.summary && <p className="text-sm font-medium text-slate-300">{entry.summary}</p>}
+                    {entry.body && <p className="max-h-48 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-400">{entry.body}</p>}
+                    {tags.length > 0 && (
+                      <ul className="flex flex-wrap gap-1.5" aria-label="Tags">
+                        {tags.map((tag) => <li key={tag} className="rounded-full bg-slate-800 px-2 py-1 text-[11px] text-slate-300">#{tag}</li>)}
+                      </ul>
+                    )}
+                    <div className="flex gap-3 text-xs">
+                      <button type="button" className="text-sky-300 hover:text-sky-200" onClick={() => handleEditEntry(entry)} disabled={Boolean(saving || deletingId)}>Edit</button>
+                      <button
+                        type="button"
+                        className="text-red-300 hover:text-red-200 disabled:opacity-50"
+                        onClick={() => handleDeleteEntry(entry)}
+                        disabled={Boolean(saving || deletingId)}
+                        aria-label={`Delete ${entry.title}`}
+                      >
+                        {deletingId === entry.id ? "Deleting…" : "Delete"}
+                      </button>
                     </div>
-                  ))
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </div>
+
+      <section className="section-card space-y-4" aria-labelledby="template-reference-heading">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h3 id="template-reference-heading" className="text-lg font-semibold text-slate-100">Template reference</h3>
+            <p className="mt-1 text-xs text-slate-500">Read-only structures created with this world. The search above filters their names and fields.</p>
+          </div>
+          {templatesError && <button type="button" className="secondary-button text-xs" onClick={() => setTemplateReloadKey((key) => key + 1)}>Reload templates</button>}
+        </div>
+
+        {templatesLoading ? (
+          <p className="text-sm text-slate-400" role="status">Loading template definitions…</p>
+        ) : templatesError ? (
+          <p className="status-error" role="alert">{templatesError}</p>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {(Object.keys(filteredTemplates) as TemplateType[]).map((type) => (
+              <article key={type} className="rounded-xl border border-slate-800 p-4 space-y-3">
+                <header>
+                  <div className="flex items-start justify-between gap-3">
+                    <h4 className="text-sm font-semibold text-slate-100">{TEMPLATE_HEADINGS[type]}</h4>
+                    <span className="text-xs text-slate-500">{filteredTemplates[type].length}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">{TEMPLATE_DESCRIPTIONS[type]}</p>
+                </header>
+                {filteredTemplates[type].length === 0 ? (
+                  <p className="text-xs text-slate-500">{normalizedSearch ? "No matching templates." : "No templates stored."}</p>
+                ) : (
+                  <div className="space-y-2">
+                    {filteredTemplates[type].map((template) => (
+                      <div key={template.id} className="rounded border border-slate-800 bg-slate-900/30 p-3 space-y-2">
+                        <p className="text-sm font-medium text-slate-200">{template.name}</p>
+                        {renderDefinitionRows(template)}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </article>
             ))}
-          </section>
-        </div>
-      </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

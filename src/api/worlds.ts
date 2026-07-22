@@ -1,4 +1,5 @@
 import { invokeOrThrow } from "./client";
+import type { TemplateDefinitionPayload } from "./templates";
 
 export type World = {
   id: string;
@@ -16,11 +17,27 @@ export async function createWorld(name: string, gameSystem: string): Promise<Wor
   return await invokeOrThrow<World>("create_world", {
     name,
     gameSystem,
-  } as any);
+  });
+}
+
+export async function createWorldWithTemplates(
+  name: string,
+  gameSystem: string,
+  templates: TemplateDefinitionPayload[]
+): Promise<World> {
+  return await invokeOrThrow<World>("create_world_with_templates", {
+    name,
+    gameSystem,
+    templates,
+  });
 }
 
 export async function getWorld(id: string): Promise<World> {
   return await invokeOrThrow<World>("get_world", { id });
+}
+
+export async function deleteWorld(id: string): Promise<void> {
+  await invokeOrThrow<void>("delete_world", { id });
 }
 
 export async function updateWorld(
@@ -32,5 +49,5 @@ export async function updateWorld(
     name: world.name,
     gameSystem: world.game_system,
     description: world.description,
-  } as any);
+  });
 }

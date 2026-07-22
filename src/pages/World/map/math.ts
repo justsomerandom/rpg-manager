@@ -7,7 +7,10 @@ export function lerp(a: number, b: number, t: number) {
 }
 
 export function randomId() {
-  return Math.random().toString(36).slice(2, 10);
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export function pseudoRandom(x: number, y: number, seed: number) {

@@ -1,12 +1,14 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, WheelEvent } from "react";
-import { useParams } from "react-router-dom";
+import type { PointerEvent as ReactPointerEvent, WheelEvent } from "react";
+import { useBlocker, useParams } from "react-router-dom";
 import {
   getWorldMap,
   saveWorldMap,
   type MapCity,
 } from "../../api/worldMap";
+import { getErrorMessage } from "../../api/client";
 import { CityMapEditor } from "../../components/CityMapEditor";
+import { deleteCityMap } from "../../api/cityMap";
 import {
   settlementIcons,
   terrainIcons,
@@ -61,6 +63,13 @@ import {
 } from "./map/generation";
 
 const iconCache = new Map<string, Promise<HTMLImageElement>>();
+const MAX_COMPILED_PIXELS = 12_000_000;
+
+function canvasPixelRatio(width: number, height: number, maximum = 2) {
+  const requested = Math.min(maximum, Math.max(1, window.devicePixelRatio || 1));
+  const pixelBudgetRatio = Math.sqrt(MAX_COMPILED_PIXELS / Math.max(1, width * height));
+  return Math.max(0.5, Math.min(requested, pixelBudgetRatio));
+}
 
 function loadIcon(url: string): Promise<HTMLImageElement> {
   if (!iconCache.has(url)) {
@@ -205,7 +214,7 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
   const logicalWidth = Math.max(640, Math.floor(map.width * cellSize));
   const logicalHeight = Math.max(640, Math.floor(map.height * cellSize));
   const canvas = document.createElement("canvas");
-  const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+  const pixelRatio = canvasPixelRatio(logicalWidth, logicalHeight);
   canvas.width = Math.floor(logicalWidth * pixelRatio);
   canvas.height = Math.floor(logicalHeight * pixelRatio);
   canvas.style.width = `${logicalWidth}px`;
@@ -272,7 +281,7 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
       if (vegUrl && pseudoRandom(x, y, map.seed + 1515) < vegLevel + 0.2) {
         iconPromises.push(
           loadIcon(vegUrl).then((img) => {
-            ctx.drawImage(img, cx - vegSize / 2, cy - vegSize / 2, vegSize, vegSize);
+            if (img.naturalWidth) ctx.drawImage(img, cx - vegSize / 2, cy - vegSize / 2, vegSize, vegSize);
           })
         );
       }
@@ -280,7 +289,7 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
         const size = Math.max(14, cellSize * 0.9);
         iconPromises.push(
           loadIcon(terrainUrl).then((img) => {
-            ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
+            if (img.naturalWidth) ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
           })
         );
       }
@@ -297,7 +306,7 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
     const size = Math.max(18, cellSize * 1.1);
     iconPromises.push(
       loadIcon(iconUrl).then((img) => {
-        ctx.drawImage(img, px - size / 2, py - size / 2, size, size);
+        if (img.naturalWidth) ctx.drawImage(img, px - size / 2, py - size / 2, size, size);
       })
     );
     ctx.save();
@@ -315,12 +324,12 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
 }
 
 async function drawCompiledIso(map: MapStateExtended): Promise<string> {
-  const tileWidth = Math.max(16, Math.floor(1400 / (map.width + map.height)));
+  const tileWidth = Math.max(8, Math.floor(1800 / (map.width + map.height)));
   const tileHeight = tileWidth / 2;
-  const logicalWidth = Math.max(960, Math.floor(tileWidth * (map.width + map.height)));
-  const logicalHeight = Math.max(720, Math.floor(tileHeight * (map.width + map.height)));
+  const logicalWidth = Math.max(960, Math.floor((tileWidth * (map.width + map.height)) / 2 + 160));
+  const logicalHeight = Math.max(720, Math.floor((tileHeight * (map.width + map.height)) / 2 + 160));
   const canvas = document.createElement("canvas");
-  const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+  const pixelRatio = canvasPixelRatio(logicalWidth, logicalHeight);
   canvas.width = Math.floor(logicalWidth * pixelRatio);
   canvas.height = Math.floor(logicalHeight * pixelRatio);
   canvas.style.width = `${logicalWidth}px`;
@@ -337,7 +346,7 @@ async function drawCompiledIso(map: MapStateExtended): Promise<string> {
   ctx.fillRect(0, 0, width, height);
 
   const originX = width / 2;
-  const originY = tileHeight * 2;
+  const originY = height / 2 - tileHeight / 2;
   const sumCenter = (map.width - 1 + map.height - 1) / 2;
 
   for (let y = 0; y < map.height; y += 1) {
@@ -366,10 +375,10 @@ async function drawCompiledIso(map: MapStateExtended): Promise<string> {
     if (!road.points.length) return;
     ctx.beginPath();
     road.points.forEach((point, index) => {
-      const px =
-        ((point.x * map.width + point.y * map.height - sumCenter) * (tileWidth / 2)) + originX;
-      const py =
-        (point.y * map.height - point.x * map.width) * (tileHeight / 2) + originY;
+      const gx = point.x * map.width - 0.5;
+      const gy = point.y * map.height - 0.5;
+      const px = ((gx + gy - sumCenter) * (tileWidth / 2)) + originX;
+      const py = (gy - gx) * (tileHeight / 2) + originY + tileHeight / 2;
       if (index === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
@@ -391,12 +400,12 @@ async function drawCompiledIso(map: MapStateExtended): Promise<string> {
       const gx = x + jitterX / tileWidth;
       const gy = y + jitterY / tileHeight;
       const isoX = (gx + gy - sumCenter) * (tileWidth / 2) + originX;
-      const isoY = (gy - gx) * (tileHeight / 2) + originY;
+      const isoY = (gy - gx) * (tileHeight / 2) + originY + tileHeight / 2;
       const vegSize = Math.max(12, tileWidth * 0.9);
       if (vegUrl && pseudoRandom(x, y, map.seed + 1516) < vegLevel + 0.2) {
         iconPromises.push(
           loadIcon(vegUrl).then((img) => {
-            ctx.drawImage(img, isoX - vegSize / 2, isoY - vegSize / 2, vegSize, vegSize);
+            if (img.naturalWidth) ctx.drawImage(img, isoX - vegSize / 2, isoY - vegSize / 2, vegSize, vegSize);
           })
         );
       }
@@ -404,7 +413,7 @@ async function drawCompiledIso(map: MapStateExtended): Promise<string> {
         const size = Math.max(16, tileWidth * 1.1);
         iconPromises.push(
           loadIcon(terrainUrl).then((img) => {
-            ctx.drawImage(img, isoX - size / 2, isoY - size / 2, size, size);
+            if (img.naturalWidth) ctx.drawImage(img, isoX - size / 2, isoY - size / 2, size, size);
           })
         );
       }
@@ -415,14 +424,14 @@ async function drawCompiledIso(map: MapStateExtended): Promise<string> {
   map.cities.forEach((city) => {
     const tier = cityTier(city.population);
     const iconUrl = settlementIcons[tier];
-    const px =
-      ((city.x * map.width + city.y * map.height - sumCenter) * (tileWidth / 2)) + originX;
-    const py =
-      (city.y * map.height - city.x * map.width) * (tileHeight / 2) + originY;
+    const gx = city.x * map.width - 0.5;
+    const gy = city.y * map.height - 0.5;
+    const px = ((gx + gy - sumCenter) * (tileWidth / 2)) + originX;
+    const py = (gy - gx) * (tileHeight / 2) + originY + tileHeight / 2;
     const size = Math.max(22, tileWidth * 1.35);
     iconPromises.push(
       loadIcon(iconUrl).then((img) => {
-        ctx.drawImage(img, px - size / 2, py - size / 2, size, size);
+        if (img.naturalWidth) ctx.drawImage(img, px - size / 2, py - size / 2, size, size);
       })
     );
     ctx.save();
@@ -439,25 +448,12 @@ async function drawCompiledIso(map: MapStateExtended): Promise<string> {
   return canvas.toDataURL("image/png");
 }
 
-// Kept temporarily as a reusable editor renderer; baked previews use the shared top-down source.
-void drawCompiledIso;
-
 async function generateCompiledRenders(map: MapStateExtended): Promise<CompiledRenders> {
   const extended = ensureExtendedMap(map);
-  const grid = await drawCompiledGrid(extended);
-  // The alternate asset is intentionally a rotated version of the same
-  // cartographic render, keeping every feature and label in sync with top-down.
-  const image = await loadIcon(grid);
-  const canvas = document.createElement("canvas");
-  canvas.width = image.naturalHeight || 1;
-  canvas.height = image.naturalWidth || 1;
-  const ctx = canvas.getContext("2d");
-  if (ctx && image.naturalWidth) {
-    ctx.translate(canvas.width / 2, canvas.height / 2);
-    ctx.rotate(Math.PI / 2);
-    ctx.drawImage(image, -image.naturalWidth / 2, -image.naturalHeight / 2);
-  }
-  const iso = ctx && image.naturalWidth ? canvas.toDataURL("image/png") : grid;
+  const [grid, iso] = await Promise.all([
+    drawCompiledGrid(extended),
+    drawCompiledIso(extended),
+  ]);
   return { grid, iso };
 }
 
@@ -479,7 +475,7 @@ function drawIsometricMap(
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-  const pixelRatio = window.devicePixelRatio ?? 1;
+  const pixelRatio = canvasPixelRatio(viewport.width, viewport.height);
   canvas.width = viewport.width * pixelRatio;
   canvas.height = viewport.height * pixelRatio;
   canvas.style.width = `${viewport.width}px`;
@@ -490,7 +486,7 @@ function drawIsometricMap(
   const tileWidth = TILE_BASE * zoom;
   const tileHeight = tileWidth / 2;
   const originX = viewport.width / 2 + pan.x;
-  const originY = tileHeight + pan.y;
+  const originY = viewport.height / 2 - tileHeight / 2 + pan.y;
   const sumCenter = (map.width - 1 + map.height - 1) / 2;
 
   for (let y = 0; y < map.height; y += 1) {
@@ -535,22 +531,17 @@ function drawIsometricMap(
     if (points.length === 0) return;
     ctx.beginPath();
     const first = points[0];
-    const startX =
-      ((first.x * map.width + first.y * map.height - sumCenter) *
-        (tileWidth / 2)) +
-      originX;
-    const startY =
-      (first.y * map.height - first.x * map.width) * (tileHeight / 2) + originY;
+    const firstGridX = first.x * map.width - 0.5;
+    const firstGridY = first.y * map.height - 0.5;
+    const startX = ((firstGridX + firstGridY - sumCenter) * (tileWidth / 2)) + originX;
+    const startY = (firstGridY - firstGridX) * (tileHeight / 2) + originY + tileHeight / 2;
     ctx.moveTo(startX, startY);
     for (let i = 1; i < points.length; i += 1) {
       const point = points[i];
-      const px =
-        ((point.x * map.width + point.y * map.height - sumCenter) *
-          (tileWidth / 2)) +
-        originX;
-      const py =
-        (point.y * map.height - point.x * map.width) * (tileHeight / 2) +
-        originY;
+      const gridX = point.x * map.width - 0.5;
+      const gridY = point.y * map.height - 0.5;
+      const px = ((gridX + gridY - sumCenter) * (tileWidth / 2)) + originX;
+      const py = (gridY - gridX) * (tileHeight / 2) + originY + tileHeight / 2;
       ctx.lineTo(px, py);
     }
     ctx.lineWidth = 2;
@@ -564,12 +555,10 @@ function drawIsometricMap(
   }
 
   map.cities.forEach((city) => {
-    const isoX =
-      ((city.x * map.width + city.y * map.height - sumCenter) *
-        (tileWidth / 2)) +
-      originX;
-    const isoY =
-      (city.y * map.height - city.x * map.width) * (tileHeight / 2) + originY;
+    const gridX = city.x * map.width - 0.5;
+    const gridY = city.y * map.height - 0.5;
+    const isoX = ((gridX + gridY - sumCenter) * (tileWidth / 2)) + originX;
+    const isoY = (gridY - gridX) * (tileHeight / 2) + originY + tileHeight / 2;
     ctx.fillStyle = city.id === highlightCityId ? "#ffe066" : "#e3f2db";
     ctx.beginPath();
     ctx.arc(isoX, isoY, 7, 0, Math.PI * 2);
@@ -599,7 +588,7 @@ function drawGridMap(
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-  const pixelRatio = window.devicePixelRatio ?? 1;
+  const pixelRatio = canvasPixelRatio(viewport.width, viewport.height);
   canvas.width = viewport.width * pixelRatio;
   canvas.height = viewport.height * pixelRatio;
   canvas.style.width = `${viewport.width}px`;
@@ -691,6 +680,16 @@ function drawGridMap(
     ctx.fillText(city.name, px, py - 10);
   });
 }
+function invalidateCompiledMap(map: MapStateExtended): MapStateExtended {
+  if (!map.compiled_grid && !map.compiled_iso && !map.compiled_updated_at) return map;
+  return {
+    ...map,
+    compiled_grid: undefined,
+    compiled_iso: undefined,
+    compiled_updated_at: undefined,
+  };
+}
+
 function applyBrushToMap(
   map: MapStateExtended,
   point: PixelPoint,
@@ -701,17 +700,37 @@ function applyBrushToMap(
   if (!BRUSH_ACTIONS.has(action)) return map;
   const width = map.width;
   const height = map.height;
-  const cx = clamp(point.x, 0, 0.9999) * (width - 1);
-  const cy = clamp(point.y, 0, 0.9999) * (height - 1);
+  const cx = clamp(point.x * width - 0.5, 0, width - 1);
+  const cy = clamp(point.y * height - 0.5, 0, height - 1);
   const radius = Math.max(1, Math.round(brushSize * Math.min(width, height)));
   const copy: MapStateExtended = {
-    ...map,
+    ...invalidateCompiledMap(map),
     relief: [...map.relief],
     moisture: [...map.moisture],
     temperature: [...map.temperature],
     vegetation: [...map.vegetation],
   };
-  const target = BIOME_TARGETS[selectedBiome];
+  const target = { ...BIOME_TARGETS[selectedBiome] };
+  switch (selectedBiome) {
+    case "ocean":
+      target.relief = clamp(map.water_level - 0.16);
+      break;
+    case "shallow":
+      target.relief = clamp(map.water_level - 0.06);
+      break;
+    case "mangrove":
+      target.relief = clamp(map.water_level - 0.045);
+      break;
+    case "reef":
+      target.relief = clamp(map.water_level + 0.005);
+      break;
+    case "beach":
+      target.relief = clamp(map.water_level + 0.018);
+      break;
+    case "wetland":
+      target.relief = clamp(map.water_level + 0.028);
+      break;
+  }
 
   for (
     let y = Math.max(0, Math.floor(cy - radius));
@@ -796,6 +815,15 @@ function distance(a: PixelPoint, b: PixelPoint) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+function closestPointOnSegment(point: PixelPoint, start: PixelPoint, end: PixelPoint) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (!lengthSquared) return { ...start };
+  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared);
+  return { x: start.x + dx * t, y: start.y + dy * t };
+}
+
 function computeReliefRange(map: MapStateExtended) {
   let min = Infinity;
   let max = -Infinity;
@@ -819,6 +847,7 @@ function computeRange(values: number[]) {
 }
 
 function isWaterCell(map: MapStateExtended, x: number, y: number) {
+  if (x < 0 || y < 0 || x >= map.width || y >= map.height) return true;
   const idx = y * map.width + x;
   return map.relief[idx] <= map.water_level;
 }
@@ -854,6 +883,38 @@ function vegetationOverlayColor(value: number, range: { min: number; max: number
   return `hsla(${hue}, ${sat}%, ${light}%, 0.95)`;
 }
 
+type PathNode = { x: number; y: number; g: number; score: number };
+
+function pushPathNode(heap: PathNode[], node: PathNode) {
+  heap.push(node);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (heap[parent].score <= node.score) break;
+    heap[index] = heap[parent];
+    index = parent;
+  }
+  heap[index] = node;
+}
+
+function popPathNode(heap: PathNode[]) {
+  const first = heap[0];
+  const last = heap.pop();
+  if (!first || !last || heap.length === 0) return first;
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    const right = left + 1;
+    if (left >= heap.length) break;
+    const child = right < heap.length && heap[right].score < heap[left].score ? right : left;
+    if (heap[child].score >= last.score) break;
+    heap[index] = heap[child];
+    index = child;
+  }
+  heap[index] = last;
+  return first;
+}
+
 function buildRoadBetweenAnchors(
   map: MapStateExtended,
   from: PixelPoint,
@@ -861,10 +922,10 @@ function buildRoadBetweenAnchors(
 ) {
   const width = map.width;
   const height = map.height;
-  const startX = clamp(from.x, 0, 0.9999) * width - 0.5;
-  const startY = clamp(from.y, 0, 0.9999) * height - 0.5;
-  const endX = clamp(to.x, 0, 0.9999) * width - 0.5;
-  const endY = clamp(to.y, 0, 0.9999) * height - 0.5;
+  const startX = clamp(from.x, 0.5 / width, 1 - 0.5 / width) * width - 0.5;
+  const startY = clamp(from.y, 0.5 / height, 1 - 0.5 / height) * height - 0.5;
+  const endX = clamp(to.x, 0.5 / width, 1 - 0.5 / width) * width - 0.5;
+  const endY = clamp(to.y, 0.5 / height, 1 - 0.5 / height) * height - 0.5;
 
   const start = { x: Math.round(startX), y: Math.round(startY) };
   const goal = { x: Math.round(endX), y: Math.round(endY) };
@@ -880,27 +941,16 @@ function buildRoadBetweenAnchors(
   const reliefAt = (x: number, y: number) => map.relief[y * width + x];
   const vegetationAt = (x: number, y: number) => map.vegetation[y * width + x] ?? 0;
 
-  const open: Array<{ x: number; y: number }> = [start];
+  const open: PathNode[] = [];
   gScore.set(key(start.x, start.y), 0);
   waterRun.set(key(start.x, start.y), isWaterCell(map, start.x, start.y) ? 1 : 0);
+  pushPathNode(open, { ...start, g: 0, score: heuristic(start.x, start.y) * 1.35 });
 
   while (open.length > 0) {
-    // Keep roads broadly direct; terrain bends them only where the grade demands it.
-    let currentIndex = 0;
-    let currentBest = open[0];
-    let currentBestF = (gScore.get(key(currentBest.x, currentBest.y)) ?? Infinity) + heuristic(currentBest.x, currentBest.y) * 1.35;
-    for (let i = 1; i < open.length; i += 1) {
-      const node = open[i];
-      const score = (gScore.get(key(node.x, node.y)) ?? Infinity) + heuristic(node.x, node.y) * 1.35;
-      if (score < currentBestF) {
-        currentBest = node;
-        currentBestF = score;
-        currentIndex = i;
-      }
-    }
-
+    // A binary heap keeps path generation responsive on the largest map size.
+    const currentBest = popPathNode(open)!;
     const currentKey = key(currentBest.x, currentBest.y);
-    open.splice(currentIndex, 1);
+    if (currentBest.g > (gScore.get(currentKey) ?? Infinity)) continue;
 
     if (currentBest.x === goal.x && currentBest.y === goal.y) {
       // Reconstruct path.
@@ -959,9 +1009,12 @@ function buildRoadBetweenAnchors(
           cameFrom.set(neighborKey, { x: currentBest.x, y: currentBest.y });
           gScore.set(neighborKey, tentativeG);
           waterRun.set(neighborKey, nextWaterRun);
-          if (!open.find((node) => node.x === nx && node.y === ny)) {
-            open.push({ x: nx, y: ny });
-          }
+          pushPathNode(open, {
+            x: nx,
+            y: ny,
+            g: tentativeG,
+            score: tentativeG + heuristic(nx, ny) * 1.35,
+          });
         }
       }
     }
@@ -994,8 +1047,9 @@ function findAttachmentTarget(map: MapStateExtended, city: MapCity): NetworkAnch
     }
   });
   map.roads.forEach((road) => {
-    road.points.forEach((point) => {
-      const d = distance(point, { x: city.x, y: city.y });
+    for (let index = 1; index < road.points.length; index += 1) {
+      const point = closestPointOnSegment(city, road.points[index - 1], road.points[index]);
+      const d = distance(point, city);
       if (d < bestDist) {
         bestDist = d;
         best = {
@@ -1005,7 +1059,7 @@ function findAttachmentTarget(map: MapStateExtended, city: MapCity): NetworkAnch
           targetId: road.id,
         };
       }
-    });
+    }
   });
   return best;
 }
@@ -1032,32 +1086,34 @@ function addCityToMap(
   name: string,
   xRatio: number,
   yRatio: number
-): { map: MapStateExtended; city: MapCity } {
+): { map: MapStateExtended; city: MapCity | null } {
   const width = map.width;
   const height = map.height;
   const clickedX = Math.round(clamp(xRatio, 0, 0.9999) * width - 0.5);
   const clickedY = Math.round(clamp(yRatio, 0, 0.9999) * height - 0.5);
   let gridX = clickedX;
   let gridY = clickedY;
-  // Snap a water click to the nearest usable land tile instead of creating an
-  // unreachable city marker offshore.
-  for (let radius = 0; radius <= 8 && isWaterCell(map, gridX, gridY); radius += 1) {
-    let candidate: { x: number; y: number } | null = null;
-    for (let dy = -radius; dy <= radius; dy += 1) {
-      for (let dx = -radius; dx <= radius; dx += 1) {
-        const x = clickedX + dx;
-        const y = clickedY + dy;
-        if (x < 0 || y < 0 || x >= width || y >= height || isWaterCell(map, x, y)) continue;
-        if (!candidate || Math.abs(dx) + Math.abs(dy) < Math.abs(candidate.x - clickedX) + Math.abs(candidate.y - clickedY)) candidate = { x, y };
+  if (isWaterCell(map, gridX, gridY)) {
+    let candidate: { x: number; y: number; distance: number } | null = null;
+    const searchRadius = Math.min(12, Math.max(width, height));
+    for (let y = Math.max(0, clickedY - searchRadius); y <= Math.min(height - 1, clickedY + searchRadius); y += 1) {
+      for (let x = Math.max(0, clickedX - searchRadius); x <= Math.min(width - 1, clickedX + searchRadius); x += 1) {
+        if (isWaterCell(map, x, y)) continue;
+        const candidateDistance = (x - clickedX) ** 2 + (y - clickedY) ** 2;
+        if (!candidate || candidateDistance < candidate.distance) {
+          candidate = { x, y, distance: candidateDistance };
+        }
       }
     }
-    if (candidate) { gridX = candidate.x; gridY = candidate.y; }
+    if (!candidate) return { map, city: null };
+    gridX = candidate.x;
+    gridY = candidate.y;
   }
   const idx = gridY * width + gridX;
   const elevation = map.relief[idx];
   const city: MapCity = {
     id: randomId(),
-    name,
+    name: name.trim().slice(0, 120),
     x: (gridX + 0.5) / width,
     y: (gridY + 0.5) / height,
     elevation,
@@ -1070,11 +1126,12 @@ function addCityToMap(
   const target = findAttachmentTarget(map, city);
   if (target && distance(target, city) <= 0.28) {
     const path = buildRoadBetweenAnchors(map, target, { x: city.x, y: city.y });
+    const roadId = randomId();
     roads = [
       ...roads,
       {
-        id: randomId(),
-        from_city_id: target.targetType === "city" ? target.targetId ?? "" : "",
+        id: roadId,
+        from_city_id: target.targetId ?? `${roadId}-start`,
         to_city_id: city.id,
         points: path,
       },
@@ -1082,7 +1139,7 @@ function addCityToMap(
   }
   return {
     map: {
-      ...map,
+      ...invalidateCompiledMap(map),
       cities: [...map.cities, city],
       roads,
     },
@@ -1111,19 +1168,20 @@ function snapToNetwork(map: MapStateExtended, point: PixelPoint): NetworkAnchor 
     }
   });
   map.roads.forEach((road) => {
-    road.points.forEach((segmentPoint, index) => {
+    for (let index = 1; index < road.points.length; index += 1) {
+      const segmentPoint = closestPointOnSegment(point, road.points[index - 1], road.points[index]);
       const d = distance(point, segmentPoint);
       if (d < bestDist) {
         bestDist = d;
         best = {
           x: segmentPoint.x,
           y: segmentPoint.y,
-          label: `Road pt ${index + 1}`,
+          label: `Road segment ${index}`,
           targetType: "road",
           targetId: road.id,
         };
       }
-    });
+    }
   });
   return best;
 }
@@ -1133,11 +1191,12 @@ function addManualRoad(
   start: NetworkAnchor,
   end: NetworkAnchor
 ): MapStateExtended {
-  if (start.x === end.x && start.y === end.y) return map;
+  if (distance(start, end) < 0.5 / Math.max(map.width, map.height)) return map;
   const path = buildRoadBetweenAnchors(map, start, end);
+  if (path.length < 2) return map;
   const roadId = randomId();
   return {
-    ...map,
+    ...invalidateCompiledMap(map),
     roads: [
       ...map.roads,
       {
@@ -1170,19 +1229,48 @@ export function WorldMapPage() {
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("biomes");
   const [desiredSize, setDesiredSize] = useState(MAP_DEFAULT_SIZE);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [cityEditorDirty, setCityEditorDirty] = useState(false);
+  const [previewWarning, setPreviewWarning] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [toolGroup, setToolGroup] = useState<ToolGroup>("general");
   const [reliefAction, setReliefAction] = useState<"raise" | "lower">("raise");
   const [locationAction, setLocationAction] = useState<PrimaryAction>("navigate");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [draftCityName, setDraftCityName] = useState("New City");
+  const [selectedCityName, setSelectedCityName] = useState("");
+  const [selectedCityPopulation, setSelectedCityPopulation] = useState("");
   const [compiledView, setCompiledView] = useState(true);
   const compiledPreferenceRef = useRef(false);
+  const revisionRef = useRef(0);
+  const pendingDeletedCityIdsRef = useRef(new Set<string>());
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportSize, setViewportSize] = useState({ width: 1200, height: 800 });
   const lastPanRef = useRef<{ x: number; y: number } | null>(null);
+
+  const markEdited = useCallback(() => {
+    revisionRef.current += 1;
+    setDirty(true);
+    setError(null);
+    setPreviewWarning(null);
+  }, []);
+
+  const blocker = useBlocker(dirty || cityEditorDirty);
+  useEffect(() => {
+    if (blocker.state !== "blocked") return;
+    if (window.confirm("Discard unsaved map changes and leave this page?")) blocker.proceed();
+    else blocker.reset();
+  }, [blocker]);
+
+  useEffect(() => {
+    if (!dirty && !cityEditorDirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty, cityEditorDirty]);
 
   const derivedPrimaryAction = useMemo<PrimaryAction>(() => {
     if (toolGroup === "biome") {
@@ -1222,10 +1310,6 @@ export function WorldMapPage() {
   }, [toolGroup]);
 
   useEffect(() => {
-    if (viewMode !== "grid") setViewMode("grid");
-  }, [viewMode]);
-
-  useEffect(() => {
     if (compiledView) {
       setToolGroup("general");
       setLocationAction("navigate");
@@ -1260,11 +1344,23 @@ export function WorldMapPage() {
   useEffect(() => {
     const node = viewportRef.current;
     if (!node) return;
+    const updateSize = () => {
+      const bounds = node.getBoundingClientRect();
+      setViewportSize({
+        width: Math.max(1, Math.round(bounds.width)),
+        height: Math.max(1, Math.round(bounds.height)),
+      });
+    };
+    if (typeof ResizeObserver === "undefined") {
+      updateSize();
+      window.addEventListener("resize", updateSize);
+      return () => window.removeEventListener("resize", updateSize);
+    }
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       setViewportSize({
-        width: Math.round(entry.contentRect.width),
-        height: Math.round(entry.contentRect.height),
+        width: Math.max(1, Math.round(entry.contentRect.width)),
+        height: Math.max(1, Math.round(entry.contentRect.height)),
       });
     });
     observer.observe(node);
@@ -1272,20 +1368,49 @@ export function WorldMapPage() {
   }, []);
 
   useEffect(() => {
-    if (!worldId) return;
+    let cancelled = false;
+    if (!worldId) {
+      setMapState(null);
+      setError("No world was selected.");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    setMapState(null);
+    setError(null);
+    setPreviewWarning(null);
+    setSelectedCity(null);
+    setSelectedCityName("");
+    setSelectedCityPopulation("");
+    setCityEditorCity(null);
+    setDirty(false);
+    setCityEditorDirty(false);
+    revisionRef.current = 0;
+    pendingDeletedCityIdsRef.current.clear();
     getWorldMap(worldId)
       .then((map) => {
+        if (cancelled) return;
         if (map) {
           setMapState(ensureExtendedMap(map));
+          setDirty(false);
         } else {
           setMapState(generateProceduralMap(Date.now()));
+          setDirty(true);
         }
         setError(null);
       })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, [worldId]);
+      .catch((e) => {
+        if (cancelled) return;
+        setError(getErrorMessage(e, "We couldn't load this world map."));
+        setMapState(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [worldId, loadAttempt]);
 
   useEffect(() => {
     if (!mapState || compiledView) return;
@@ -1382,6 +1507,12 @@ export function WorldMapPage() {
   }, [mapState, cityEditorCity]);
 
   const handleGenerateMap = () => {
+    if (
+      mapState &&
+      (mapState.cities.length > 0 || mapState.roads.length > 0 || dirty) &&
+      !window.confirm("Generate new terrain? This replaces all terrain, cities, and roads on the current map.")
+    ) return;
+    markEdited();
     setMapState(
       generateProceduralMap(
         Date.now(),
@@ -1390,14 +1521,19 @@ export function WorldMapPage() {
         mapState?.height ?? MAP_DEFAULT_SIZE
       )
     );
+    setSelectedCity(null);
+    setSelectedCityName("");
+    setSelectedCityPopulation("");
+    setCityEditorCity(null);
     setStatusMessage("Generated new terrain.");
   };
 
   const handleNaturalizeRelief = () => {
+    markEdited();
     setMapState((prev) =>
       prev
         ? {
-            ...prev,
+            ...invalidateCompiledMap(prev),
             relief: smoothLayer(prev.relief, prev.width, prev.height, 1),
           }
         : prev
@@ -1406,10 +1542,11 @@ export function WorldMapPage() {
   };
 
   const handleNormalizeLayer = (layer: "moisture" | "temperature" | "vegetation") => {
+    markEdited();
     setMapState((prev) =>
       prev
         ? {
-            ...prev,
+            ...invalidateCompiledMap(prev),
             [layer]: normalizeLayer(prev[layer], prev.width, prev.height),
           }
         : prev
@@ -1418,33 +1555,75 @@ export function WorldMapPage() {
   };
 
   const handleWaterChange = (value: number) => {
-    setMapState((prev) => (prev ? { ...prev, water_level: value } : prev));
+    markEdited();
+    setMapState((prev) => (prev ? { ...invalidateCompiledMap(prev), water_level: clamp(value, 0.05, 0.8) } : prev));
   };
 
   const handleSaveMap = async () => {
-    if (!worldId || !mapState) return;
+    if (!worldId || !mapState || saving) return;
     setSaving(true);
+    setError(null);
+    setPreviewWarning(null);
+    const snapshot = ensureExtendedMap(mapState);
+    const saveRevision = revisionRef.current;
+    const deletedCityIds = [...pendingDeletedCityIdsRef.current];
     try {
-      setStatusMessage("Rendering compiled maps\u2026");
-      const compiled = await generateCompiledRenders(mapState);
-      const payload = {
-        ...mapState,
-        compiled_grid: compiled.grid,
-        compiled_iso: compiled.iso,
-        compiled_updated_at: Date.now(),
-      };
-      const saved = await saveWorldMap(worldId, payload);
-      setMapState(ensureExtendedMap(saved));
-      setStatusMessage("Saved map and compiled renders.");
-      setError(null);
+      const savedSource = ensureExtendedMap(await saveWorldMap(worldId, snapshot));
+      if (deletedCityIds.length) {
+        const cleanup = await Promise.allSettled(deletedCityIds.map((cityId) => deleteCityMap(cityId)));
+        cleanup.forEach((result, index) => {
+          if (result.status === "fulfilled") pendingDeletedCityIdsRef.current.delete(deletedCityIds[index]);
+        });
+        if (cleanup.some((result) => result.status === "rejected")) {
+          setPreviewWarning("The world map was saved, but one or more removed city plans could not be cleaned up.");
+        }
+      }
+      if (revisionRef.current === saveRevision) {
+        setMapState(savedSource);
+        setDirty(false);
+      }
+      setStatusMessage("Map saved. Rendering previews…");
+      try {
+        const compiled = await generateCompiledRenders(snapshot);
+        if (!compiled.grid || !compiled.iso) throw new Error("The renderer returned an empty image.");
+        const payload = {
+          ...snapshot,
+          compiled_grid: compiled.grid,
+          compiled_iso: compiled.iso,
+          compiled_updated_at: Date.now(),
+        };
+        const savedWithPreviews = ensureExtendedMap(await saveWorldMap(worldId, payload));
+        if (revisionRef.current === saveRevision) {
+          setMapState(savedWithPreviews);
+          setDirty(false);
+          setStatusMessage("Map and previews saved.");
+        } else {
+          setStatusMessage("Saved an earlier snapshot; newer edits are still unsaved.");
+        }
+      } catch (previewError) {
+        setPreviewWarning(
+          `${getErrorMessage(previewError, "Preview rendering failed.")} Your editable map data was saved safely.`
+        );
+        setStatusMessage(
+          revisionRef.current === saveRevision
+            ? "Map saved without refreshed previews."
+            : "Saved an earlier snapshot; newer edits are still unsaved."
+        );
+      }
     } catch (e) {
-      setError(String(e));
+      setError(getErrorMessage(e, "We couldn't save this world map."));
     } finally {
       setSaving(false);
     }
   };
 
   const handleResizeMap = () => {
+    if (
+      mapState &&
+      (mapState.cities.length > 0 || mapState.roads.length > 0 || dirty) &&
+      !window.confirm(`Rebuild at ${desiredSize} × ${desiredSize}? This replaces all terrain, cities, and roads.`)
+    ) return;
+    markEdited();
     const next = generateProceduralMap(
       Date.now(),
       mapState?.water_level ?? DEFAULT_WATER_LEVEL,
@@ -1452,11 +1631,15 @@ export function WorldMapPage() {
       desiredSize
     );
     setMapState(next);
-    setStatusMessage(`Rebuilt map at ${desiredSize} x ${desiredSize}.`);
+    setSelectedCity(null);
+    setSelectedCityName("");
+    setSelectedCityPopulation("");
+    setCityEditorCity(null);
+    setStatusMessage(`Rebuilt map at ${desiredSize} × ${desiredSize}.`);
   };
 
   const screenToMapPoint = useCallback(
-    (event: MouseEvent<HTMLCanvasElement>) => {
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
       if (!mapState || !canvasRef.current) return null;
       const rect = canvasRef.current.getBoundingClientRect();
       const localX = event.clientX - rect.left;
@@ -1466,16 +1649,16 @@ export function WorldMapPage() {
         const gridX = (localX - panOffset.x) / cellSize;
         const gridY = (localY - panOffset.y) / cellSize;
         return {
-          x: clamp((gridX + 0.5) / mapState.width, 0.5 / mapState.width, 1 - 0.5 / mapState.width),
-          y: clamp((gridY + 0.5) / mapState.height, 0.5 / mapState.height, 1 - 0.5 / mapState.height),
+          x: clamp(gridX / mapState.width, 0.5 / mapState.width, 1 - 0.5 / mapState.width),
+          y: clamp(gridY / mapState.height, 0.5 / mapState.height, 1 - 0.5 / mapState.height),
         };
       }
       const tileWidth = TILE_BASE * zoom;
       const tileHeight = tileWidth / 2;
       const originX = viewportSize.width / 2 + panOffset.x;
-      const originY = tileHeight + panOffset.y;
+      const originY = viewportSize.height / 2 - tileHeight / 2 + panOffset.y;
       const dx = localX - originX;
-      const dy = localY - originY;
+      const dy = localY - originY - tileHeight / 2;
       const sumCenter = (mapState.width - 1 + mapState.height - 1) / 2;
       const gridX = sumCenter / 2 + dx / tileWidth - dy / tileHeight;
       const gridY = sumCenter / 2 + dx / tileWidth + dy / tileHeight;
@@ -1505,8 +1688,9 @@ export function WorldMapPage() {
     setZoom((prev) => clamp(prev + delta, MIN_ZOOM, MAX_ZOOM));
   };
 
-  const handlePointerDown = (event: MouseEvent<HTMLCanvasElement>) => {
-    if (cityEditorCity) return;
+  const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (cityEditorCity || saving) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     if (event.button === 2) {
       setIsPanning(true);
       lastPanRef.current = { x: event.clientX, y: event.clientY };
@@ -1518,6 +1702,8 @@ export function WorldMapPage() {
         const nearest = findNearestCity(mapState, point, 0.035);
         if (nearest) {
           setSelectedCity(nearest);
+          setSelectedCityName(nearest.name);
+          setSelectedCityPopulation(String(nearest.population));
           setStatusMessage(`Selected ${nearest.name}`);
         }
       }
@@ -1527,6 +1713,7 @@ export function WorldMapPage() {
     }
     if (isBrushAction) {
       const point = screenToMapPoint(event);
+      markEdited();
       handleBrush(point);
       setIsBrushing(true);
       return;
@@ -1536,8 +1723,19 @@ export function WorldMapPage() {
       if (point && mapState) {
         const name = draftCityName.trim() || `City ${mapState.cities.length + 1}`;
         const next = addCityToMap(mapState, name, point.x, point.y);
+        if (!next.city) {
+          setStatusMessage("Choose land or a coast with land within 12 cells.");
+          return;
+        }
+        if (findNearestCity(mapState, next.city, 0.5 / Math.min(mapState.width, mapState.height))) {
+          setStatusMessage("A city already occupies that location.");
+          return;
+        }
+        markEdited();
         setMapState(next.map);
         setSelectedCity(next.city);
+        setSelectedCityName(next.city.name);
+        setSelectedCityPopulation(String(next.city.population));
         setCityEditorCity(next.city);
         setDraftCityName(`City ${mapState.cities.length + 2}`);
         setStatusMessage(`Added ${name}`);
@@ -1552,14 +1750,20 @@ export function WorldMapPage() {
         setRoadDraftStart(snapped);
         setStatusMessage(`Road anchor: ${snapped.label}`);
       } else {
-        setMapState(addManualRoad(mapState, roadDraftStart, snapped));
+        const next = addManualRoad(mapState, roadDraftStart, snapped);
+        if (next === mapState) {
+          setStatusMessage("Choose a different endpoint for this road.");
+          return;
+        }
+        markEdited();
+        setMapState(next);
         setRoadDraftStart(null);
         setStatusMessage("Road segment added.");
       }
     }
   };
 
-  const handlePointerMove = (event: MouseEvent<HTMLCanvasElement>) => {
+  const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (isPanning) {
       const last = lastPanRef.current;
       if (last) {
@@ -1575,7 +1779,10 @@ export function WorldMapPage() {
     }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (event?: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event?.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
     setIsPanning(false);
     setIsBrushing(false);
     lastPanRef.current = null;
@@ -1583,7 +1790,69 @@ export function WorldMapPage() {
 
   const handleSelectCity = (city: MapCity) => {
     setSelectedCity(city);
+    setSelectedCityName(city.name);
+    setSelectedCityPopulation(String(city.population));
     setStatusMessage(`Selected ${city.name}`);
+  };
+
+  const handleUpdateSelectedCity = () => {
+    if (!selectedCity) return;
+    const name = selectedCityName.trim().slice(0, 120);
+    const population = Number(selectedCityPopulation);
+    if (!name) {
+      setError("City name is required.");
+      return;
+    }
+    if (!Number.isFinite(population) || population < 0 || population > 2_000_000_000) {
+      setError("Population must be between 0 and 2,000,000,000.");
+      return;
+    }
+    const updated = { ...selectedCity, name, population: Math.round(population) };
+    markEdited();
+    setMapState((current) => current ? {
+      ...invalidateCompiledMap(current),
+      cities: current.cities.map((city) => city.id === updated.id ? updated : city),
+    } : current);
+    setSelectedCity(updated);
+    setCityEditorCity((current) => current?.id === updated.id ? updated : current);
+    setStatusMessage(`Updated ${name}.`);
+  };
+
+  const handleDeleteSelectedCity = () => {
+    if (!selectedCity || !mapState) return;
+    if (!window.confirm(`Remove ${selectedCity.name} and every connected world road? The city plan will be deleted when you save the world map.`)) return;
+    const deleted = selectedCity;
+    const endpointThreshold = 0.75 / Math.min(mapState.width, mapState.height);
+    markEdited();
+    pendingDeletedCityIdsRef.current.add(deleted.id);
+    setMapState((current) => current ? {
+      ...invalidateCompiledMap(current),
+      cities: current.cities.filter((city) => city.id !== deleted.id),
+      roads: current.roads.filter((road) => {
+        if (road.from_city_id === deleted.id || road.to_city_id === deleted.id) return false;
+        const first = road.points[0];
+        const last = road.points[road.points.length - 1];
+        return !(
+          (first && distance(first, deleted) < endpointThreshold) ||
+          (last && distance(last, deleted) < endpointThreshold)
+        );
+      }),
+    } : current);
+    setSelectedCity(null);
+    setSelectedCityName("");
+    setSelectedCityPopulation("");
+    setCityEditorCity((current) => current?.id === deleted.id ? null : current);
+    setStatusMessage(`${deleted.name} removed. Save the map to commit deletion.`);
+  };
+
+  const handleRemoveWorldRoad = (roadId: string) => {
+    markEdited();
+    setRoadDraftStart(null);
+    setMapState((current) => current ? {
+      ...invalidateCompiledMap(current),
+      roads: current.roads.filter((road) => road.id !== roadId),
+    } : current);
+    setStatusMessage("Road removed. Save the map to commit deletion.");
   };
 
   const handleViewToggle = () => {
@@ -1606,7 +1875,18 @@ export function WorldMapPage() {
             Peak: {(mapInfo?.highestPeak ?? 0).toFixed(2)}  |  Avg temp:
             {(mapInfo?.avgTemperature ?? 0).toFixed(2)}
           </p>
+          <p className={dirty ? "text-amber-300" : "text-emerald-300"} role="status">
+            {dirty ? "Unsaved map changes" : "Source map saved"}
+          </p>
+          <p className={compiledAvailable ? "text-emerald-300" : "text-amber-300"}>
+            {compiledAvailable ? "Previews current" : "Previews need compiling"}
+          </p>
         </div>
+        {previewWarning && (
+          <p role="alert" className="rounded-lg border border-amber-700/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
+            {previewWarning}
+          </p>
+        )}
       </section>
       <section className="grid grid-cols-2 gap-3">
         <button onClick={handleGenerateMap} className="primary-button" type="button">
@@ -1616,9 +1896,9 @@ export function WorldMapPage() {
           onClick={handleSaveMap}
           className="secondary-button"
           type="button"
-          disabled={saving}
+          disabled={saving || (!dirty && compiledAvailable)}
         >
-          {saving ? "Saving..." : "Save map"}
+          {saving ? "Saving…" : dirty ? "Save map" : compiledAvailable ? "Saved" : "Build previews"}
         </button>
       </section>
       <section className="space-y-2 text-sm">
@@ -1717,7 +1997,7 @@ export function WorldMapPage() {
         <button onClick={handleResizeMap} className="secondary-button">
           Rebuild at size
         </button>
-        <button onClick={handleNaturalizeRelief} className="secondary-button">
+        <button type="button" onClick={handleNaturalizeRelief} className="secondary-button">
           Smooth relief
         </button>
       </section>
@@ -1886,6 +2166,7 @@ export function WorldMapPage() {
           Smooth relief
         </button>
         <button
+          type="button"
           onClick={() => handleNormalizeLayer("vegetation")}
           className="secondary-button"
         >
@@ -1961,17 +2242,54 @@ export function WorldMapPage() {
             </p>
           </button>
         ))}
+        {!mapState?.cities.length && <p className="text-xs text-earth-sand/60">No cities placed yet.</p>}
       </div>
-      <button
-        type="button"
-        disabled={!selectedCity}
-        onClick={() => selectedCity && setCityEditorCity(selectedCity)}
-        className="secondary-button disabled:opacity-40"
-      >
-        Open city mapper
-      </button>
+      {selectedCity && (
+        <section className="space-y-2 rounded-xl border border-earth-clay/30 bg-black/20 p-3">
+          <p className="text-xs uppercase tracking-[0.2em] text-earth-sand/60">Selected city</p>
+          <label className="flex flex-col gap-1">
+            Name
+            <input className="input-field" maxLength={120} value={selectedCityName} onChange={(event) => setSelectedCityName(event.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1">
+            Population
+            <input className="input-field" type="number" min={0} max={2_000_000_000} step={1} value={selectedCityPopulation} onChange={(event) => setSelectedCityPopulation(event.target.value)} />
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={handleUpdateSelectedCity} className="primary-button">Apply details</button>
+            <button type="button" onClick={() => setCityEditorCity(selectedCity)} className="secondary-button">Open city mapper</button>
+          </div>
+          <button type="button" onClick={handleDeleteSelectedCity} className="w-full rounded border border-red-800/70 px-3 py-2 text-red-300">
+            Remove city and connected roads
+          </button>
+        </section>
+      )}
+      {roadDraftStart && (
+        <button type="button" onClick={() => setRoadDraftStart(null)} className="secondary-button">
+          Cancel road from {roadDraftStart.label}
+        </button>
+      )}
+      <section className="space-y-2">
+        <p className="text-xs uppercase tracking-[0.2em] text-earth-sand/60">World roads</p>
+        <div className="max-h-40 space-y-1 overflow-y-auto pr-1">
+          {mapState?.roads.map((road, index) => (
+            <div key={road.id} className="flex items-center justify-between gap-2 rounded border border-earth-clay/30 px-3 py-2 text-xs">
+              <span>Road {index + 1} · {road.points.length} points</span>
+              <button
+                type="button"
+                aria-label={`Remove world road ${index + 1}`}
+                onClick={() => { if (window.confirm(`Remove world road ${index + 1}?`)) handleRemoveWorldRoad(road.id); }}
+                className="text-red-300"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          {!mapState?.roads.length && <p className="text-xs text-earth-sand/60">No roads drawn yet.</p>}
+        </div>
+      </section>
       <p className="text-xs text-earth-sand/70">
-        Road tool snaps to cities or road nodes. Right click always pans.
+        Road tool snaps to cities or road segments. Right click always pans.
       </p>
     </div>
   );
@@ -2047,16 +2365,19 @@ export function WorldMapPage() {
   };
   if (loading) {
     return (
-      <div className="h-full w-full flex items-center justify-center text-earth-sand/70">
-        Loading map...
+      <div role="status" className="h-full w-full flex items-center justify-center text-earth-sand/70">
+        Loading map…
       </div>
     );
   }
 
   if (!mapState) {
     return (
-      <div className="h-full w-full flex items-center justify-center text-red-200">
-        Failed to load map data.
+      <div className="h-full w-full flex flex-col gap-3 items-center justify-center text-center text-red-200">
+        <p role="alert">{error ?? "Failed to load map data."}</p>
+        <button type="button" className="secondary-button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
+          Try again
+        </button>
       </div>
     );
   }
@@ -2065,8 +2386,8 @@ export function WorldMapPage() {
     <div className="h-full w-full relative text-earth-sand bg-black">
       <div className="absolute inset-0 flex">
         <div
-          className={`h-full bg-grove-950/95 text-sm transition-all duration-200 border-r border-earth-clay/20 ${
-            sidebarOpen ? "w-80" : "w-10"
+          className={`absolute inset-y-0 left-0 z-20 sm:relative sm:z-auto h-full flex flex-col bg-grove-950/95 text-sm transition-all duration-200 border-r border-earth-clay/20 shadow-2xl sm:shadow-none ${
+            sidebarOpen ? "w-[min(20rem,calc(100vw-3rem))]" : "w-10"
           }`}
         >
           <div className="flex items-center justify-between px-2 py-2 border-b border-earth-clay/20">
@@ -2077,6 +2398,8 @@ export function WorldMapPage() {
             )}
             <button
               type="button"
+              aria-label={sidebarOpen ? "Collapse map tools" : "Expand map tools"}
+              aria-expanded={sidebarOpen}
               className="text-lg text-earth-sand/80"
               onClick={handleSidebarToggle}
             >
@@ -2084,12 +2407,13 @@ export function WorldMapPage() {
             </button>
           </div>
           {sidebarOpen ? (
-            <div className="flex flex-col h-full">
+            <div className="flex flex-1 min-h-0 flex-col">
               <div className="flex gap-1 p-2">
                 {(Object.entries(TOOL_GROUP_LABELS) as [ToolGroup, string][]).map(([key, label]) => (
                   <button
                     key={key}
                     type="button"
+                    aria-pressed={toolGroup === key}
                     onClick={() => setToolGroup(key)}
                     className={`flex-1 rounded-full px-3 py-2 text-xs ${
                       toolGroup === key
@@ -2133,20 +2457,37 @@ export function WorldMapPage() {
             ) : null}
             <canvas
               ref={canvasRef}
+              role="application"
+              aria-label="Interactive world map. Use the selected tool with pointer or touch. Arrow keys pan; plus and minus zoom; Escape cancels a road."
+              tabIndex={0}
               className="absolute inset-0"
               style={{
                 cursor: cursorStyle,
                 opacity: compiledView ? 0.01 : 1,
                 pointerEvents: "auto",
+                touchAction: "none",
               }}
-              onMouseDown={handlePointerDown}
-              onMouseMove={handlePointerMove}
-              onMouseUp={handlePointerUp}
-              onMouseLeave={handlePointerUp}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
+              onLostPointerCapture={handlePointerUp}
+              onKeyDown={(event) => {
+                const panStep = event.shiftKey ? 80 : 32;
+                if (event.key === "ArrowLeft") setPanOffset((current) => ({ ...current, x: current.x + panStep }));
+                else if (event.key === "ArrowRight") setPanOffset((current) => ({ ...current, x: current.x - panStep }));
+                else if (event.key === "ArrowUp") setPanOffset((current) => ({ ...current, y: current.y + panStep }));
+                else if (event.key === "ArrowDown") setPanOffset((current) => ({ ...current, y: current.y - panStep }));
+                else if (event.key === "+" || event.key === "=") setZoom((current) => clamp(current + 0.1, MIN_ZOOM, MAX_ZOOM));
+                else if (event.key === "-" || event.key === "_") setZoom((current) => clamp(current - 0.1, MIN_ZOOM, MAX_ZOOM));
+                else if (event.key === "Escape") setRoadDraftStart(null);
+                else return;
+                event.preventDefault();
+              }}
               onWheel={handleWheel}
               onContextMenu={(event) => event.preventDefault()}
             />
-            <div className="absolute top-4 right-4 bg-black/70 backdrop-blur rounded-xl border border-earth-clay/30 px-4 py-3 text-xs space-y-1">
+            <div className="absolute top-4 right-4 max-w-[calc(100%-2rem)] bg-black/70 backdrop-blur rounded-xl border border-earth-clay/30 px-4 py-3 text-xs space-y-1">
               <p>
                 {compiledView
                   ? "Compiled preview \u2014 navigation only"
@@ -2159,12 +2500,12 @@ export function WorldMapPage() {
               {roadDraftStart && <p>Road anchor: {roadDraftStart.label}</p>}
             </div>
             {statusMessage && (
-              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/70 text-earth-sand px-4 py-2 rounded-full text-xs border border-brand/40">
+              <div role="status" className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/70 text-earth-sand px-4 py-2 rounded-full text-xs border border-brand/40">
                 {statusMessage}
               </div>
             )}
             {error && (
-              <div className="absolute bottom-6 right-6 bg-red-500/80 text-sm px-3 py-2 rounded">
+              <div role="alert" className="absolute bottom-6 right-6 max-w-[calc(100%-2rem)] bg-red-800/90 text-sm px-3 py-2 rounded">
                 {error}
               </div>
             )}
@@ -2172,7 +2513,7 @@ export function WorldMapPage() {
         </div>
       </div>
       {cityEditorCity ? (
-        <CityMapEditor city={cityEditorCity} externalConnections={cityExternalConnections} onClose={() => setCityEditorCity(null)} />
+        <CityMapEditor city={cityEditorCity} externalConnections={cityExternalConnections} onDirtyChange={setCityEditorDirty} onClose={() => { setCityEditorDirty(false); setCityEditorCity(null); }} />
       ) : null}
     </div>
   );

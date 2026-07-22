@@ -19,3 +19,21 @@ export async function createCharacter(
 ): Promise<Character> {
   return await invokeOrThrow<Character>("create_character", { worldId, name });
 }
+
+export async function updateCharacter(
+  id: string,
+  name: string,
+  notes: string,
+  attributesJson?: string
+): Promise<Character> {
+  return await invokeOrThrow<Character>("update_character", {
+    id,
+    name,
+    notes,
+    attributesJson,
+  });
+}
+
+export async function deleteCharacter(id: string): Promise<void> {
+  await invokeOrThrow<void>("delete_character", { id });
+}

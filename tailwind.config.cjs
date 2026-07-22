@@ -4,8 +4,8 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["'Inter'", "system-ui", "sans-serif"],
-        display: ["'Space Grotesk'", "Inter", "sans-serif"],
+        sans: ["Inter", "ui-sans-serif", "system-ui", "Segoe UI", "sans-serif"],
+        display: ["Aptos Display", "Segoe UI Variable Display", "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
       },
       colors: {
         slate: {
@@ -14,7 +14,8 @@ module.exports = {
           200: "#cddfc8",
           300: "#a9c2ad",
           400: "#7fa18b",
-          500: "#5f7f6f",
+          // Kept light enough for small secondary text on grove panels (WCAG AA).
+          500: "#789989",
           600: "#456055",
           700: "#30453c",
           800: "#1d2d25",

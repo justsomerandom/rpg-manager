@@ -1,14 +1,21 @@
 use chrono::Utc;
-use rusqlite::{Connection, Row};
+use rusqlite::{Connection, OptionalExtension, Row};
 use tauri::State;
 use uuid::Uuid;
 
-use crate::db::AppState;
+use crate::db::{ensure_world_exists, AppState};
 use crate::models::WorldEntry;
+use crate::validation::{
+    validate_id, validate_json_object, validate_name, validate_text, MAX_JSON_DOCUMENT_BYTES,
+    MAX_LONG_TEXT_BYTES, MAX_SHORT_TEXT_BYTES,
+};
 
-fn validate_entry_category(category: &str) -> Result<(), String> {
-    match category {
-        "magic_system" | "item_type" | "character_template" | "faction" | "region" => Ok(()),
+fn validate_entry_category(category: String) -> Result<String, String> {
+    let category = category.trim().to_owned();
+    match category.as_str() {
+        "note" | "magic_system" | "item_type" | "character_template" | "faction" | "region" => {
+            Ok(category)
+        }
         _ => Err("Unsupported world entry category".into()),
     }
 }
@@ -27,16 +34,15 @@ fn map_world_entry(row: &Row<'_>) -> rusqlite::Result<WorldEntry> {
 }
 
 fn fetch_world_entry_by_id(conn: &Connection, entry_id: &str) -> Result<WorldEntry, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, world_id, category, title, summary, body, metadata_json, created_at
-             FROM world_entries
-             WHERE id = ?1",
-        )
-        .map_err(|e| e.to_string())?;
-
-    stmt.query_row([entry_id], map_world_entry)
-        .map_err(|e| e.to_string())
+    conn.query_row(
+        "SELECT id, world_id, category, title, summary, body, metadata_json, created_at
+         FROM world_entries WHERE id = ?1",
+        [entry_id],
+        map_world_entry,
+    )
+    .optional()
+    .map_err(|e| format!("Failed to load world entry: {e}"))?
+    .ok_or_else(|| "World entry not found".into())
 }
 
 #[tauri::command]
@@ -45,29 +51,28 @@ pub fn list_world_entries(
     world_id: String,
     category: Option<String>,
 ) -> Result<Vec<WorldEntry>, String> {
+    let world_id = validate_id(world_id, "World ID")?;
+    let category = category.map(validate_entry_category).transpose()?;
     let conn = state
         .conn
         .lock()
-        .map_err(|_| "DB mutex poisoned".to_string())?;
+        .map_err(|_| "Database is unavailable".to_owned())?;
+    ensure_world_exists(&conn, &world_id)?;
     let mut entries = Vec::new();
-
-    if let Some(cat) = category {
-        validate_entry_category(&cat)?;
+    if let Some(category) = category {
         let mut stmt = conn
             .prepare(
                 "SELECT id, world_id, category, title, summary, body, metadata_json, created_at
                  FROM world_entries
                  WHERE world_id = ?1 AND category = ?2
-                 ORDER BY created_at DESC",
+                 ORDER BY created_at DESC, id DESC",
             )
-            .map_err(|e| e.to_string())?;
-
-        let iter = stmt
-            .query_map((&world_id, &cat), |row| map_world_entry(row))
-            .map_err(|e| e.to_string())?;
-
-        for entry in iter {
-            entries.push(entry.map_err(|e| e.to_string())?);
+            .map_err(|e| format!("Failed to load world entries: {e}"))?;
+        let rows = stmt
+            .query_map((&world_id, &category), map_world_entry)
+            .map_err(|e| format!("Failed to load world entries: {e}"))?;
+        for row in rows {
+            entries.push(row.map_err(|e| format!("Failed to read a world entry: {e}"))?);
         }
     } else {
         let mut stmt = conn
@@ -75,19 +80,16 @@ pub fn list_world_entries(
                 "SELECT id, world_id, category, title, summary, body, metadata_json, created_at
                  FROM world_entries
                  WHERE world_id = ?1
-                 ORDER BY created_at DESC",
+                 ORDER BY created_at DESC, id DESC",
             )
-            .map_err(|e| e.to_string())?;
-
-        let iter = stmt
-            .query_map([&world_id], |row| map_world_entry(row))
-            .map_err(|e| e.to_string())?;
-
-        for entry in iter {
-            entries.push(entry.map_err(|e| e.to_string())?);
+            .map_err(|e| format!("Failed to load world entries: {e}"))?;
+        let rows = stmt
+            .query_map([&world_id], map_world_entry)
+            .map_err(|e| format!("Failed to load world entries: {e}"))?;
+        for row in rows {
+            entries.push(row.map_err(|e| format!("Failed to read a world entry: {e}"))?);
         }
     }
-
     Ok(entries)
 }
 
@@ -101,19 +103,20 @@ pub fn create_world_entry(
     body: String,
     metadata_json: Option<String>,
 ) -> Result<WorldEntry, String> {
-    if title.trim().is_empty() {
-        return Err("Entry title cannot be empty".into());
-    }
-    validate_entry_category(&category)?;
-
+    let world_id = validate_id(world_id, "World ID")?;
+    let category = validate_entry_category(category)?;
+    let title = validate_name(title, "Entry title")?;
+    validate_text(&summary, "Entry summary", MAX_SHORT_TEXT_BYTES)?;
+    validate_text(&body, "Entry body", MAX_LONG_TEXT_BYTES)?;
+    let metadata_json =
+        validate_json_object(metadata_json, "Entry metadata", MAX_JSON_DOCUMENT_BYTES)?;
     let id = Uuid::new_v4().to_string();
     let created_at = Utc::now().timestamp();
-    let metadata = metadata_json.unwrap_or_else(|| "{}".into());
-
     let conn = state
         .conn
         .lock()
-        .map_err(|_| "DB mutex poisoned".to_string())?;
+        .map_err(|_| "Database is unavailable".to_owned())?;
+    ensure_world_exists(&conn, &world_id)?;
     conn.execute(
         "INSERT INTO world_entries
          (id, world_id, category, title, summary, body, metadata_json, created_at)
@@ -125,12 +128,11 @@ pub fn create_world_entry(
             &title,
             &summary,
             &body,
-            &metadata,
+            &metadata_json,
             &created_at,
         ),
     )
-    .map_err(|e| e.to_string())?;
-
+    .map_err(|e| format!("Failed to create world entry: {e}"))?;
     Ok(WorldEntry {
         id,
         world_id,
@@ -138,7 +140,7 @@ pub fn create_world_entry(
         title,
         summary,
         body,
-        metadata_json: metadata,
+        metadata_json,
         created_at,
     })
 }
@@ -147,42 +149,60 @@ pub fn create_world_entry(
 pub fn update_world_entry(
     state: State<AppState>,
     id: String,
+    category: Option<String>,
     title: String,
     summary: String,
     body: String,
     metadata_json: Option<String>,
 ) -> Result<WorldEntry, String> {
-    if title.trim().is_empty() {
-        return Err("Entry title cannot be empty".into());
-    }
-
-    let metadata = metadata_json.unwrap_or_else(|| "{}".into());
+    let id = validate_id(id, "World entry ID")?;
+    let category = category.map(validate_entry_category).transpose()?;
+    let title = validate_name(title, "Entry title")?;
+    validate_text(&summary, "Entry summary", MAX_SHORT_TEXT_BYTES)?;
+    validate_text(&body, "Entry body", MAX_LONG_TEXT_BYTES)?;
+    let metadata_json =
+        validate_json_object(metadata_json, "Entry metadata", MAX_JSON_DOCUMENT_BYTES)?;
     let conn = state
         .conn
         .lock()
-        .map_err(|_| "DB mutex poisoned".to_string())?;
-    conn.execute(
-        "UPDATE world_entries
-         SET title = ?1,
-             summary = ?2,
-             body = ?3,
-             metadata_json = ?4
-         WHERE id = ?5",
-        (&title, &summary, &body, &metadata, &id),
-    )
-    .map_err(|e| e.to_string())?;
-
-    let entry = fetch_world_entry_by_id(&conn, &id)?;
-    Ok(entry)
+        .map_err(|_| "Database is unavailable".to_owned())?;
+    let affected = conn
+        .execute(
+            "UPDATE world_entries
+             SET category = COALESCE(?1, category), title = ?2, summary = ?3, body = ?4, metadata_json = ?5
+             WHERE id = ?6",
+            (&category, &title, &summary, &body, &metadata_json, &id),
+        )
+        .map_err(|e| format!("Failed to update world entry: {e}"))?;
+    if affected == 0 {
+        return Err("World entry not found".into());
+    }
+    fetch_world_entry_by_id(&conn, &id)
 }
 
 #[tauri::command]
 pub fn delete_world_entry(state: State<AppState>, id: String) -> Result<(), String> {
+    let id = validate_id(id, "World entry ID")?;
     let conn = state
         .conn
         .lock()
-        .map_err(|_| "DB mutex poisoned".to_string())?;
-    conn.execute("DELETE FROM world_entries WHERE id = ?1", [&id])
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| "Database is unavailable".to_owned())?;
+    let affected = conn
+        .execute("DELETE FROM world_entries WHERE id = ?1", [&id])
+        .map_err(|e| format!("Failed to delete world entry: {e}"))?;
+    if affected == 0 {
+        return Err("World entry not found".into());
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supports_general_notes_but_rejects_unknown_categories() {
+        assert_eq!(validate_entry_category(" note ".into()).unwrap(), "note");
+        assert!(validate_entry_category("unknown".into()).is_err());
+    }
 }

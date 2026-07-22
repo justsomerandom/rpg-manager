@@ -31,8 +31,10 @@ const DICTIONARIES: Record<RoadTheme, { roots: string[]; suffixes: string[] }> =
 };
 
 export function roadName(theme: RoadTheme, index: number, tier: number) {
-  const dictionary = DICTIONARIES[theme];
-  const root = dictionary.roots[index % dictionary.roots.length];
-  const suffix = dictionary.suffixes[(index + tier) % dictionary.suffixes.length];
+  const dictionary = DICTIONARIES[theme] ?? DICTIONARIES.elvish;
+  const safeIndex = Number.isFinite(index) ? Math.max(0, Math.floor(index)) : 0;
+  const safeTier = Number.isFinite(tier) ? Math.max(1, Math.floor(tier)) : 1;
+  const root = dictionary.roots[safeIndex % dictionary.roots.length];
+  const suffix = dictionary.suffixes[(safeIndex + safeTier) % dictionary.suffixes.length];
   return `${root} ${suffix}`;
 }

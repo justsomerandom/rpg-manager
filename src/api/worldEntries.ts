@@ -6,6 +6,7 @@ export const WORLD_ENTRY_CATEGORIES = [
   "character_template",
   "faction",
   "region",
+  "note",
 ] as const;
 
 export type WorldEntryCategory = (typeof WORLD_ENTRY_CATEGORIES)[number];
@@ -27,7 +28,6 @@ export async function listWorldEntries(
 ): Promise<WorldEntry[]> {
   return await invokeOrThrow<WorldEntry[]>("list_world_entries", {
     worldId,
-    world_id: worldId,
     category,
   });
 }
@@ -42,18 +42,17 @@ export async function createWorldEntry(
 ): Promise<WorldEntry> {
   return await invokeOrThrow<WorldEntry>("create_world_entry", {
     worldId,
-    world_id: worldId,
     category,
     title,
     summary,
     body,
     metadataJson,
-    metadata_json: metadataJson,
-  } as any);
+  });
 }
 
 export async function updateWorldEntry(
   id: string,
+  category: WorldEntryCategory,
   title: string,
   summary: string,
   body: string,
@@ -61,12 +60,12 @@ export async function updateWorldEntry(
 ): Promise<WorldEntry> {
   return await invokeOrThrow<WorldEntry>("update_world_entry", {
     id,
+    category,
     title,
     summary,
     body,
     metadataJson,
-    metadata_json: metadataJson,
-  } as any);
+  });
 }
 
 export async function deleteWorldEntry(id: string): Promise<void> {
