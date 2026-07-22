@@ -17,7 +17,7 @@ There is no server, account, telemetry, cloud sync, or multiplayer layer. A `Wor
 - **Index:** SQLite-backed searchable codex entries with categories, tags, full text, editing, deletion, and non-destructive migration from the former browser-storage format.
 - **Lore:** editable books and chapters with selection guards and confirmed deletion.
 - **World maps:** deterministic terrain generation, environmental layers, brush tools, grid/isometric views, cities, roads, safe source saves, and compiled presentation previews.
-- **City maps:** procedural settlement layouts, districts, roads, buildings, named occupants, editable geometry, and world-road approaches.
+- **City maps:** procedural settlement layouts, districts, roads, named buildings, editable geometry, and synchronized world-road approaches.
 
 ## Architecture
 
@@ -60,11 +60,11 @@ cargo check
 
 ## Local data and security
 
-The database is named `ttrpg-manager.db` and is created in the operating system's Tauri application-data directory. SQLite foreign keys, WAL journaling, a busy timeout, explicit schema versioning, and transactional multi-record operations protect data integrity.
+The database is named `ttrpg-manager.db` and is created in the operating system's Tauri application-data directory. SQLite foreign keys, WAL journaling, a busy timeout, explicit schema versioning, and transactional multi-record operations protect data integrity. City plans are world-scoped and can only be read or saved after their parent city exists in that world's saved map.
 
 The production webview uses a restrictive content security policy. The application does not request shell, file-system, network, or URL-opener capabilities. Compiled map images are locally generated PNG data URLs and are size-bounded before storage.
 
-Back up the database file before installing experimental builds or making large campaign changes. User-facing export/restore is not implemented yet.
+Back up the database file before installing experimental builds or making large campaign changes. Schema v3 moves legacy city-plan rows that cannot be linked unambiguously into `quarantined_city_maps` for manual recovery instead of exposing or deleting them; user-facing export/restore is not implemented yet.
 
 ## Audit notes
 

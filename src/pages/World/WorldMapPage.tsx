@@ -8,7 +8,7 @@ import {
 } from "../../api/worldMap";
 import { getErrorMessage } from "../../api/client";
 import { CityMapEditor } from "../../components/CityMapEditor";
-import { deleteCityMap } from "../../api/cityMap";
+import { useCloseGuard } from "../../hooks/useCloseGuard";
 import {
   settlementIcons,
   terrainIcons,
@@ -1208,6 +1208,33 @@ function addManualRoad(
     ],
   };
 }
+
+function collectDependentRoadIds(
+  roads: MapStateExtended["roads"],
+  initialRoadIds: Iterable<string>
+) {
+  const removed = new Set(initialRoadIds);
+  const dependents = new Map<string, string[]>();
+  for (const road of roads) {
+    for (const endpointId of [road.from_city_id, road.to_city_id]) {
+      if (!endpointId) continue;
+      const connected = dependents.get(endpointId);
+      if (connected) connected.push(road.id);
+      else dependents.set(endpointId, [road.id]);
+    }
+  }
+  const queue = [...removed];
+  for (let index = 0; index < queue.length; index += 1) {
+    for (const roadId of dependents.get(queue[index]) ?? []) {
+      if (!removed.has(roadId)) {
+        removed.add(roadId);
+        queue.push(roadId);
+      }
+    }
+  }
+  return removed;
+}
+
 export function WorldMapPage() {
   const { worldId } = useParams();
   const [mapState, setMapState] = useState<MapStateExtended | null>(null);
@@ -1242,9 +1269,11 @@ export function WorldMapPage() {
   const [selectedCityName, setSelectedCityName] = useState("");
   const [selectedCityPopulation, setSelectedCityPopulation] = useState("");
   const [compiledView, setCompiledView] = useState(true);
+  const [cityEditorSaving, setCityEditorSaving] = useState(false);
   const compiledPreferenceRef = useRef(false);
   const revisionRef = useRef(0);
-  const pendingDeletedCityIdsRef = useRef(new Set<string>());
+  const activeWorldIdRef = useRef(worldId);
+  activeWorldIdRef.current = worldId;
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -1258,19 +1287,26 @@ export function WorldMapPage() {
     setPreviewWarning(null);
   }, []);
 
-  const blocker = useBlocker(dirty || cityEditorDirty);
+  const mutationPending = saving || cityEditorSaving;
+  const navigationBlocked = dirty || cityEditorDirty || mutationPending;
+  const blocker = useBlocker(navigationBlocked);
   useEffect(() => {
     if (blocker.state !== "blocked") return;
-    if (window.confirm("Discard unsaved map changes and leave this page?")) blocker.proceed();
+    if (mutationPending) {
+      window.alert("A map save is still in progress. Wait for it to finish before leaving this page.");
+      blocker.reset();
+      return;
+    }
+    if (window.confirm("Discard unsaved world or city map changes and leave this page?")) blocker.proceed();
     else blocker.reset();
-  }, [blocker]);
+  }, [blocker, mutationPending]);
 
-  useEffect(() => {
-    if (!dirty && !cityEditorDirty) return;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty, cityEditorDirty]);
+  useCloseGuard({
+    active: navigationBlocked,
+    pending: mutationPending,
+    pendingMessage: "A map save is still in progress. Wait for it to finish before closing the app.",
+    confirmMessage: "Discard unsaved world or city map changes and close the app?",
+  });
 
   const derivedPrimaryAction = useMemo<PrimaryAction>(() => {
     if (toolGroup === "biome") {
@@ -1369,6 +1405,8 @@ export function WorldMapPage() {
 
   useEffect(() => {
     let cancelled = false;
+    activeWorldIdRef.current = worldId;
+    setSaving(false);
     if (!worldId) {
       setMapState(null);
       setError("No world was selected.");
@@ -1385,8 +1423,8 @@ export function WorldMapPage() {
     setCityEditorCity(null);
     setDirty(false);
     setCityEditorDirty(false);
+    setCityEditorSaving(false);
     revisionRef.current = 0;
-    pendingDeletedCityIdsRef.current.clear();
     getWorldMap(worldId)
       .then((map) => {
         if (cancelled) return;
@@ -1472,7 +1510,7 @@ export function WorldMapPage() {
     return {
       cityCount: mapState.cities.length,
       roadCount: mapState.roads.length,
-      highestPeak: Math.max(...mapState.relief),
+      highestPeak: computeReliefRange(mapState).max,
       avgTemperature,
     };
   }, [mapState]);
@@ -1561,59 +1599,55 @@ export function WorldMapPage() {
 
   const handleSaveMap = async () => {
     if (!worldId || !mapState || saving) return;
+    const saveWorldId = worldId;
     setSaving(true);
     setError(null);
     setPreviewWarning(null);
     const snapshot = ensureExtendedMap(mapState);
     const saveRevision = revisionRef.current;
-    const deletedCityIds = [...pendingDeletedCityIdsRef.current];
     try {
-      const savedSource = ensureExtendedMap(await saveWorldMap(worldId, snapshot));
-      if (deletedCityIds.length) {
-        const cleanup = await Promise.allSettled(deletedCityIds.map((cityId) => deleteCityMap(cityId)));
-        cleanup.forEach((result, index) => {
-          if (result.status === "fulfilled") pendingDeletedCityIdsRef.current.delete(deletedCityIds[index]);
-        });
-        if (cleanup.some((result) => result.status === "rejected")) {
-          setPreviewWarning("The world map was saved, but one or more removed city plans could not be cleaned up.");
-        }
-      }
-      if (revisionRef.current === saveRevision) {
+      const savedSource = ensureExtendedMap(await saveWorldMap(saveWorldId, snapshot));
+      const isActiveWorld = () => activeWorldIdRef.current === saveWorldId;
+      if (isActiveWorld() && revisionRef.current === saveRevision) {
         setMapState(savedSource);
         setDirty(false);
       }
-      setStatusMessage("Map saved. Rendering previews…");
+      if (isActiveWorld()) setStatusMessage("Map saved. Rendering previews…");
       try {
-        const compiled = await generateCompiledRenders(snapshot);
+        const compiled = await generateCompiledRenders(savedSource);
         if (!compiled.grid || !compiled.iso) throw new Error("The renderer returned an empty image.");
         const payload = {
-          ...snapshot,
+          ...savedSource,
           compiled_grid: compiled.grid,
           compiled_iso: compiled.iso,
           compiled_updated_at: Date.now(),
         };
-        const savedWithPreviews = ensureExtendedMap(await saveWorldMap(worldId, payload));
-        if (revisionRef.current === saveRevision) {
+        const savedWithPreviews = ensureExtendedMap(await saveWorldMap(saveWorldId, payload));
+        if (isActiveWorld() && revisionRef.current === saveRevision) {
           setMapState(savedWithPreviews);
           setDirty(false);
           setStatusMessage("Map and previews saved.");
-        } else {
+        } else if (isActiveWorld()) {
           setStatusMessage("Saved an earlier snapshot; newer edits are still unsaved.");
         }
       } catch (previewError) {
-        setPreviewWarning(
-          `${getErrorMessage(previewError, "Preview rendering failed.")} Your editable map data was saved safely.`
-        );
-        setStatusMessage(
-          revisionRef.current === saveRevision
-            ? "Map saved without refreshed previews."
-            : "Saved an earlier snapshot; newer edits are still unsaved."
-        );
+        if (isActiveWorld()) {
+          setPreviewWarning(
+            `${getErrorMessage(previewError, "Preview rendering failed.")} Your editable map data was saved safely.`
+          );
+          setStatusMessage(
+            revisionRef.current === saveRevision
+              ? "Map saved without refreshed previews."
+              : "Saved an earlier snapshot; newer edits are still unsaved."
+          );
+        }
       }
     } catch (e) {
-      setError(getErrorMessage(e, "We couldn't save this world map."));
+      if (activeWorldIdRef.current === saveWorldId) {
+        setError(getErrorMessage(e, "We couldn't save this world map."));
+      }
     } finally {
-      setSaving(false);
+      if (activeWorldIdRef.current === saveWorldId) setSaving(false);
     }
   };
 
@@ -1648,6 +1682,9 @@ export function WorldMapPage() {
         const cellSize = TILE_BASE * zoom;
         const gridX = (localX - panOffset.x) / cellSize;
         const gridY = (localY - panOffset.y) / cellSize;
+        if (gridX < 0 || gridY < 0 || gridX > mapState.width || gridY > mapState.height) {
+          return null;
+        }
         return {
           x: clamp(gridX / mapState.width, 0.5 / mapState.width, 1 - 0.5 / mapState.width),
           y: clamp(gridY / mapState.height, 0.5 / mapState.height, 1 - 0.5 / mapState.height),
@@ -1662,6 +1699,14 @@ export function WorldMapPage() {
       const sumCenter = (mapState.width - 1 + mapState.height - 1) / 2;
       const gridX = sumCenter / 2 + dx / tileWidth - dy / tileHeight;
       const gridY = sumCenter / 2 + dx / tileWidth + dy / tileHeight;
+      if (
+        gridX < -0.5 ||
+        gridY < -0.5 ||
+        gridX > mapState.width - 0.5 ||
+        gridY > mapState.height - 0.5
+      ) {
+        return null;
+      }
       return {
         x: clamp((gridX + 0.5) / mapState.width, 0.5 / mapState.width, 1 - 0.5 / mapState.width),
         y: clamp((gridY + 0.5) / mapState.height, 0.5 / mapState.height, 1 - 0.5 / mapState.height),
@@ -1691,14 +1736,14 @@ export function WorldMapPage() {
   const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (cityEditorCity || saving) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    if (event.button === 2) {
+    if (event.button !== 0) {
       setIsPanning(true);
       lastPanRef.current = { x: event.clientX, y: event.clientY };
       return;
     }
     if (primaryAction === "navigate") {
       const point = screenToMapPoint(event);
-      if (point && mapState && event.button === 0) {
+      if (!compiledView && point && mapState) {
         const nearest = findNearestCity(mapState, point, 0.035);
         if (nearest) {
           setSelectedCity(nearest);
@@ -1713,6 +1758,7 @@ export function WorldMapPage() {
     }
     if (isBrushAction) {
       const point = screenToMapPoint(event);
+      if (!point) return;
       markEdited();
       handleBrush(point);
       setIsBrushing(true);
@@ -1823,20 +1869,22 @@ export function WorldMapPage() {
     if (!window.confirm(`Remove ${selectedCity.name} and every connected world road? The city plan will be deleted when you save the world map.`)) return;
     const deleted = selectedCity;
     const endpointThreshold = 0.75 / Math.min(mapState.width, mapState.height);
+    const directlyConnectedRoadIds = mapState.roads.flatMap((road) => {
+      const first = road.points[0];
+      const last = road.points[road.points.length - 1];
+      return road.from_city_id === deleted.id ||
+        road.to_city_id === deleted.id ||
+        (first && distance(first, deleted) < endpointThreshold) ||
+        (last && distance(last, deleted) < endpointThreshold)
+        ? [road.id]
+        : [];
+    });
+    const removedRoadIds = collectDependentRoadIds(mapState.roads, directlyConnectedRoadIds);
     markEdited();
-    pendingDeletedCityIdsRef.current.add(deleted.id);
     setMapState((current) => current ? {
       ...invalidateCompiledMap(current),
       cities: current.cities.filter((city) => city.id !== deleted.id),
-      roads: current.roads.filter((road) => {
-        if (road.from_city_id === deleted.id || road.to_city_id === deleted.id) return false;
-        const first = road.points[0];
-        const last = road.points[road.points.length - 1];
-        return !(
-          (first && distance(first, deleted) < endpointThreshold) ||
-          (last && distance(last, deleted) < endpointThreshold)
-        );
-      }),
+      roads: current.roads.filter((road) => !removedRoadIds.has(road.id)),
     } : current);
     setSelectedCity(null);
     setSelectedCityName("");
@@ -1846,13 +1894,23 @@ export function WorldMapPage() {
   };
 
   const handleRemoveWorldRoad = (roadId: string) => {
+    if (!mapState) return;
+    const removedRoadIds = collectDependentRoadIds(mapState.roads, [roadId]);
+    const dependentCount = removedRoadIds.size - 1;
+    if (!window.confirm(
+      dependentCount > 0
+        ? `Remove this road and ${dependentCount} dependent branch${dependentCount === 1 ? "" : "es"}?`
+        : "Remove this world road?"
+    )) return;
     markEdited();
     setRoadDraftStart(null);
     setMapState((current) => current ? {
       ...invalidateCompiledMap(current),
-      roads: current.roads.filter((road) => road.id !== roadId),
+      roads: current.roads.filter((road) => !removedRoadIds.has(road.id)),
     } : current);
-    setStatusMessage("Road removed. Save the map to commit deletion.");
+    setStatusMessage(
+      `${removedRoadIds.size} road${removedRoadIds.size === 1 ? "" : "s"} removed. Save the map to commit deletion.`
+    );
   };
 
   const handleViewToggle = () => {
@@ -1898,7 +1956,13 @@ export function WorldMapPage() {
           type="button"
           disabled={saving || (!dirty && compiledAvailable)}
         >
-          {saving ? "Saving…" : dirty ? "Save map" : compiledAvailable ? "Saved" : "Build previews"}
+          {saving
+            ? "Saving…"
+            : dirty
+            ? "Save map"
+            : compiledAvailable
+            ? "Saved"
+            : "Build previews"}
         </button>
       </section>
       <section className="space-y-2 text-sm">
@@ -1944,7 +2008,7 @@ export function WorldMapPage() {
             onChange={(event) => handleWaterChange(Number(event.target.value))}
           />
         </label>
-        <label className="flex items-center justify-between gap-4">
+        <div className="flex items-center justify-between gap-4">
           <span>View</span>
           <button
             type="button"
@@ -1953,7 +2017,7 @@ export function WorldMapPage() {
           >
             {viewMode === "iso" ? "Isometric" : "Top-down"}
           </button>
-        </label>
+        </div>
         <label className="flex items-center justify-between gap-4">
           <span>Overlay</span>
           <select
@@ -1994,7 +2058,7 @@ export function WorldMapPage() {
             ))}
           </select>
         </label>
-        <button onClick={handleResizeMap} className="secondary-button">
+        <button type="button" onClick={handleResizeMap} className="secondary-button">
           Rebuild at size
         </button>
         <button type="button" onClick={handleNaturalizeRelief} className="secondary-button">
@@ -2162,7 +2226,7 @@ export function WorldMapPage() {
         />
       </label>
       <div className="space-y-2">
-        <button onClick={handleNaturalizeRelief} className="secondary-button">
+        <button type="button" onClick={handleNaturalizeRelief} className="secondary-button">
           Smooth relief
         </button>
         <button
@@ -2257,8 +2321,19 @@ export function WorldMapPage() {
           </label>
           <div className="grid grid-cols-2 gap-2">
             <button type="button" onClick={handleUpdateSelectedCity} className="primary-button">Apply details</button>
-            <button type="button" onClick={() => setCityEditorCity(selectedCity)} className="secondary-button">Open city mapper</button>
+            <button
+              type="button"
+              onClick={() => setCityEditorCity(selectedCity)}
+              className="secondary-button"
+              disabled={dirty || saving}
+              title={dirty ? "Save the world map before editing this city's plan." : undefined}
+            >
+              Open city mapper
+            </button>
           </div>
+          {dirty && (
+            <p className="text-xs text-amber-300">Save the world map before opening this city's plan.</p>
+          )}
           <button type="button" onClick={handleDeleteSelectedCity} className="w-full rounded border border-red-800/70 px-3 py-2 text-red-300">
             Remove city and connected roads
           </button>
@@ -2278,7 +2353,7 @@ export function WorldMapPage() {
               <button
                 type="button"
                 aria-label={`Remove world road ${index + 1}`}
-                onClick={() => { if (window.confirm(`Remove world road ${index + 1}?`)) handleRemoveWorldRoad(road.id); }}
+                onClick={() => handleRemoveWorldRoad(road.id)}
                 className="text-red-300"
               >
                 Remove
@@ -2512,8 +2587,20 @@ export function WorldMapPage() {
           </div>
         </div>
       </div>
-      {cityEditorCity ? (
-        <CityMapEditor city={cityEditorCity} externalConnections={cityExternalConnections} onDirtyChange={setCityEditorDirty} onClose={() => { setCityEditorDirty(false); setCityEditorCity(null); }} />
+      {cityEditorCity && worldId ? (
+        <CityMapEditor
+          key={cityEditorCity.id}
+          worldId={worldId}
+          city={cityEditorCity}
+          externalConnections={cityExternalConnections}
+          onDirtyChange={setCityEditorDirty}
+          onSavingChange={setCityEditorSaving}
+          onClose={() => {
+            setCityEditorDirty(false);
+            setCityEditorSaving(false);
+            setCityEditorCity(null);
+          }}
+        />
       ) : null}
     </div>
   );

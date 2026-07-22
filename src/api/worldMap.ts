@@ -32,9 +32,9 @@ export type MapState = {
   roads: MapRoad[];
   temperature?: number[];
   vegetation?: number[];
-  compiled_grid?: string;
-  compiled_iso?: string;
-  compiled_updated_at?: number;
+  compiled_grid?: string | null;
+  compiled_iso?: string | null;
+  compiled_updated_at?: number | null;
 };
 
 export async function getWorldMap(worldId: string): Promise<MapState | null> {

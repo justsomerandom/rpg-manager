@@ -9,6 +9,7 @@ import {
 } from "../../api/characters";
 import { getErrorMessage } from "../../api/client";
 import { listWorldTemplates } from "../../api/templates";
+import { useCloseGuard } from "../../hooks/useCloseGuard";
 
 type CharacterFeatureType =
   | "number_stat"
@@ -56,7 +57,7 @@ const parseTemplate = (name: string, rawDefinition: string): CharacterTemplate =
   const rawFeatures = (parsed as { features?: unknown }).features;
   if (!Array.isArray(rawFeatures)) return { name, features: [] };
 
-  const features = rawFeatures.flatMap((candidate, index): CharacterFeature[] => {
+  const parsedFeatures = rawFeatures.flatMap((candidate, index): CharacterFeature[] => {
     if (!candidate || typeof candidate !== "object") return [];
     const feature = candidate as Record<string, unknown>;
     if (typeof feature.label !== "string" || !feature.label.trim() || !isFeatureType(feature.type)) {
@@ -75,6 +76,13 @@ const parseTemplate = (name: string, rawDefinition: string): CharacterTemplate =
     ];
   });
 
+  const seenIds = new Set<string>();
+  const features = parsedFeatures.filter((feature) => {
+    if (seenIds.has(feature.id)) return false;
+    seenIds.add(feature.id);
+    return true;
+  });
+
   return { name, features };
 };
 
@@ -86,11 +94,13 @@ const parseAttributes = (raw: string): { attributes: CharacterAttributes; invali
     }
 
     const attributes: CharacterAttributes = {};
+    let invalid = false;
     Object.entries(value).forEach(([key, entry]) => {
       if (typeof entry === "string" || typeof entry === "boolean") attributes[key] = entry;
-      if (typeof entry === "number" && Number.isFinite(entry)) attributes[key] = entry;
+      else if (typeof entry === "number" && Number.isFinite(entry)) attributes[key] = entry;
+      else invalid = true;
     });
-    return { attributes, invalid: false };
+    return { attributes, invalid };
   } catch {
     return { attributes: {}, invalid: true };
   }
@@ -153,6 +163,7 @@ export function WorldCharactersPage() {
 
     let cancelled = false;
     setLoading(true);
+    setCharacters([]);
     setCharactersLoadFailed(false);
     setCharactersError(null);
     listCharacters(worldId)
@@ -227,19 +238,33 @@ export function WorldCharactersPage() {
     );
   }, [editAttributes, editName, editNotes, editingCharacter]);
 
-  const blocker = useBlocker(editDirty && !savingId);
+  const navigationBlocked =
+    editDirty || Boolean(newName) || creating || Boolean(savingId) || Boolean(deletingId);
+  const blocker = useBlocker(navigationBlocked);
   useEffect(() => {
     if (blocker.state !== "blocked") return;
-    if (window.confirm("Discard the unsaved character-sheet changes and leave this page?")) {
+    if (creating || savingId || deletingId) {
+      window.alert("A character change is still in progress. Wait for it to finish before leaving this page.");
+      blocker.reset();
+      return;
+    }
+    if (window.confirm("Discard your unsaved character changes and leave this page?")) {
       blocker.proceed();
     } else {
       blocker.reset();
     }
-  }, [blocker]);
+  }, [blocker, creating, deletingId, savingId]);
+
+  useCloseGuard({
+    active: navigationBlocked,
+    pending: Boolean(creating || savingId || deletingId),
+    pendingMessage: "A character change is still in progress. Wait for it to finish before leaving this page.",
+    confirmMessage: "Discard your unsaved character changes and leave this page?",
+  });
 
   const handleCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!worldId || creating || loading) return;
+    if (!worldId || creating || loading || charactersLoadFailed || savingId || deletingId) return;
     const name = newName.trim();
     if (!name) {
       setCharactersError("Character name is required.");
@@ -299,7 +324,7 @@ export function WorldCharactersPage() {
 
   const handleUpdate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!editingCharacter || savingId) return;
+    if (!editingCharacter || savingId || creating || deletingId) return;
     const name = editName.trim();
     if (!name) {
       setCharactersError("Character name is required.");
@@ -329,7 +354,7 @@ export function WorldCharactersPage() {
   };
 
   const handleDelete = async (character: Character) => {
-    if (deletingId || savingId) return;
+    if (deletingId || savingId || creating) return;
     const confirmed = window.confirm(
       `Delete “${character.name}”? This permanently removes their notes and sheet data.`
     );
@@ -370,6 +395,7 @@ export function WorldCharactersPage() {
             type="checkbox"
             className="h-4 w-4 accent-emerald-500"
             checked={value === true}
+            disabled={Boolean(savingId || creating || deletingId)}
             onChange={(event) => setAttribute(feature.id, event.target.checked)}
           />
         </label>
@@ -389,6 +415,7 @@ export function WorldCharactersPage() {
             min={feature.min}
             max={feature.max}
             value={typeof value === "number" ? value : ""}
+            disabled={Boolean(savingId || creating || deletingId)}
             onChange={(event) => {
               const next = event.target.value;
               const numeric = next === "" ? undefined : Number(next);
@@ -408,6 +435,7 @@ export function WorldCharactersPage() {
           id={inputId}
           className="input-field"
           value={typeof value === "string" || typeof value === "number" ? String(value) : ""}
+          disabled={Boolean(savingId || creating || deletingId)}
           onChange={(event) => setAttribute(feature.id, event.target.value)}
           maxLength={500}
         />
@@ -433,9 +461,9 @@ export function WorldCharactersPage() {
       </div>
 
       <section className="section-card space-y-3" aria-labelledby="add-character-heading">
-        <h3 id="add-character-heading" className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+        <h2 id="add-character-heading" className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
           Add character
-        </h3>
+        </h2>
         <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleCreate}>
           <div className="flex-1">
             <label htmlFor="new-character-name" className="sr-only">Character name</label>
@@ -446,12 +474,16 @@ export function WorldCharactersPage() {
               value={newName}
               maxLength={120}
               required
-              onChange={(event) => setNewName(event.target.value)}
+              disabled={creating || Boolean(savingId || deletingId)}
+              onChange={(event) => {
+                setNewName(event.target.value);
+                setCharactersError(null);
+              }}
             />
           </div>
           <button
             type="submit"
-            disabled={creating || loading || !worldId || !newName.trim()}
+            disabled={creating || loading || charactersLoadFailed || Boolean(savingId || deletingId) || !worldId || !newName.trim()}
             className="primary-button"
           >
             {creating ? "Adding…" : "Add character"}
@@ -462,9 +494,9 @@ export function WorldCharactersPage() {
       <section className="section-card space-y-3" aria-labelledby="character-template-heading">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h3 id="character-template-heading" className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+            <h2 id="character-template-heading" className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
               Character template
-            </h3>
+            </h2>
             <p className="mt-1 text-xs text-slate-500">This sheet structure is shared by every hero in the world.</p>
           </div>
           {templateError && (
@@ -501,9 +533,9 @@ export function WorldCharactersPage() {
       <section className="section-card space-y-3" aria-labelledby="characters-heading">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h3 id="characters-heading" className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+            <h2 id="characters-heading" className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
               Characters
-            </h3>
+            </h2>
             {!loading && <p className="mt-1 text-xs text-slate-500">{characters.length} in this party</p>}
           </div>
           {charactersLoadFailed && worldId && (
@@ -515,6 +547,8 @@ export function WorldCharactersPage() {
 
         {loading ? (
           <p className="text-sm text-slate-400" role="status">Loading characters…</p>
+        ) : charactersLoadFailed ? (
+          <p className="text-sm text-slate-500">The roster is unavailable. Reload it to try again.</p>
         ) : characters.length === 0 ? (
           <p className="text-sm text-slate-500">No characters yet. Add the first hero above.</p>
         ) : (
@@ -536,6 +570,7 @@ export function WorldCharactersPage() {
                             value={editName}
                             maxLength={120}
                             required
+                            disabled={Boolean(savingId || creating || deletingId)}
                             onChange={(event) => setEditName(event.target.value)}
                           />
                         </div>
@@ -549,6 +584,7 @@ export function WorldCharactersPage() {
                             rows={3}
                             value={editNotes}
                             maxLength={5000}
+                            disabled={Boolean(savingId || creating || deletingId)}
                             placeholder="Background, goals, conditions, table notes…"
                             onChange={(event) => setEditNotes(event.target.value)}
                           />
@@ -571,10 +607,10 @@ export function WorldCharactersPage() {
                       )}
 
                       <div className="flex flex-wrap gap-2">
-                        <button type="submit" className="primary-button" disabled={savingId === character.id || !editName.trim()}>
+                        <button type="submit" className="primary-button" disabled={Boolean(savingId || creating || deletingId) || !editName.trim()}>
                           {savingId === character.id ? "Saving…" : "Save sheet"}
                         </button>
-                        <button type="button" className="secondary-button" disabled={savingId === character.id} onClick={cancelEditing}>
+                        <button type="button" className="secondary-button" disabled={Boolean(savingId || creating || deletingId)} onClick={cancelEditing}>
                           Cancel
                         </button>
                       </div>
@@ -582,7 +618,7 @@ export function WorldCharactersPage() {
                   ) : (
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
-                        <p className="font-medium text-slate-100">{character.name}</p>
+                        <h3 className="font-medium text-slate-100">{character.name}</h3>
                         <p className="mt-1 text-xs text-slate-500">
                           Added {new Date(character.created_at * 1000).toLocaleDateString()}
                         </p>
@@ -603,14 +639,14 @@ export function WorldCharactersPage() {
                         })()}
                       </div>
                       <div className="flex shrink-0 gap-2">
-                        <button type="button" className="secondary-button text-xs" onClick={() => startEditing(character)} disabled={Boolean(savingId || deletingId)}>
+                        <button type="button" className="secondary-button text-xs" onClick={() => startEditing(character)} disabled={Boolean(savingId || deletingId || creating)}>
                           Edit sheet
                         </button>
                         <button
                           type="button"
                           className="text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
                           onClick={() => handleDelete(character)}
-                          disabled={Boolean(savingId || deletingId)}
+                          disabled={Boolean(savingId || deletingId || creating)}
                           aria-label={`Delete ${character.name}`}
                         >
                           {deletingId === character.id ? "Deleting…" : "Delete"}

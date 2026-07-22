@@ -1,82 +1,57 @@
-import { useEffect, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useBlocker, useOutletContext, useParams } from "react-router-dom";
 import { getErrorMessage } from "../../api/client";
-import { getWorld, updateWorld, type World } from "../../api/worlds";
+import { updateWorld, type World } from "../../api/worlds";
+import { useCloseGuard } from "../../hooks/useCloseGuard";
+import type { WorldOutletContext } from "./WorldLayout";
 
-type WorldOutletContext = {
-  world: World | null;
-  setWorld: Dispatch<SetStateAction<World | null>>;
-};
-
-const sameWorldDetails = (left: World | null, right: World | null) =>
-  Boolean(
-    left &&
-      right &&
-      left.name === right.name &&
-      left.game_system === right.game_system &&
-      left.description === right.description
-  );
+const sameWorldDetails = (left: World, right: World) =>
+  left.name === right.name &&
+  left.game_system === right.game_system &&
+  left.description === right.description;
 
 export function WorldOverviewPage() {
   const { worldId } = useParams();
-  const outletContext = useOutletContext<WorldOutletContext | undefined>();
-  const [world, setWorld] = useState<World | null>(null);
-  const [savedWorld, setSavedWorld] = useState<World | null>(null);
-  const [loading, setLoading] = useState(Boolean(worldId));
+  const { world: layoutWorld, setWorld: setLayoutWorld } = useOutletContext<WorldOutletContext>();
+  const [world, setWorld] = useState<World>(() => layoutWorld);
+  const [savedWorld, setSavedWorld] = useState<World>(() => layoutWorld);
   const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    if (!worldId) {
-      setWorld(null);
-      setSavedWorld(null);
-      setLoadError("This page needs a valid world.");
-      setLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setLoading(true);
-    setLoadError(null);
+    if (!worldId || layoutWorld.id !== worldId) return;
+    setWorld(layoutWorld);
+    setSavedWorld(layoutWorld);
     setSaveError(null);
     setSaveMessage(null);
-    setWorld(null);
+  }, [layoutWorld.id, worldId]);
 
-    getWorld(worldId)
-      .then((loadedWorld) => {
-        if (cancelled) return;
-        setWorld(loadedWorld);
-        setSavedWorld(loadedWorld);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setLoadError(getErrorMessage(error, "We couldn't load this world."));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadKey, worldId]);
-
-  const dirty = Boolean(world && savedWorld && !sameWorldDetails(world, savedWorld));
-  const nameIsValid = Boolean(world?.name.trim());
-  const blocker = useBlocker(dirty && !saving);
+  const dirty = !sameWorldDetails(world, savedWorld);
+  const nameIsValid = Boolean(world.name.trim());
+  const navigationBlocked = dirty || saving;
+  const blocker = useBlocker(navigationBlocked);
 
   useEffect(() => {
     if (blocker.state !== "blocked") return;
+    if (saving) {
+      window.alert("Your campaign is still being saved. Wait for it to finish before leaving this page.");
+      blocker.reset();
+      return;
+    }
     if (window.confirm("Discard your unsaved campaign changes and leave this page?")) {
       blocker.proceed();
     } else {
       blocker.reset();
     }
-  }, [blocker]);
+  }, [blocker, saving]);
+
+  useCloseGuard({
+    active: navigationBlocked,
+    pending: saving,
+    pendingMessage: "Your campaign is still being saved. Wait for it to finish before leaving this page.",
+    confirmMessage: "Discard your unsaved campaign changes and leave this page?",
+  });
 
   const updateDraft = (patch: Partial<Pick<World, "name" | "game_system" | "description">>) => {
     setWorld((current) => (current ? { ...current, ...patch } : current));
@@ -86,7 +61,7 @@ export function WorldOverviewPage() {
 
   const handleSave = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!world || !worldId || saving) return;
+    if (!worldId || layoutWorld.id !== worldId || world.id !== worldId || saving) return;
 
     const name = world.name.trim();
     if (!name) {
@@ -105,7 +80,7 @@ export function WorldOverviewPage() {
       });
       setWorld(updated);
       setSavedWorld(updated);
-      outletContext?.setWorld(updated);
+      setLayoutWorld(updated);
       setSaveMessage("Campaign details saved.");
     } catch (error) {
       setSaveError(getErrorMessage(error, "We couldn't save your changes."));
@@ -114,27 +89,11 @@ export function WorldOverviewPage() {
     }
   };
 
-  if (loading) {
+  if (!worldId || layoutWorld.id !== worldId || world.id !== worldId) {
     return (
       <p className="status-info" role="status" aria-live="polite">
         Loading campaign…
       </p>
-    );
-  }
-
-  if (!world) {
-    return (
-      <div className="page-shell max-w-4xl">
-        <div className="section-card space-y-3" role="alert">
-          <h2 className="text-lg font-semibold text-slate-100">Campaign unavailable</h2>
-          <p className="status-error">{loadError ?? "World not found."}</p>
-          {worldId && (
-            <button type="button" className="secondary-button" onClick={() => setReloadKey((key) => key + 1)}>
-              Try again
-            </button>
-          )}
-        </div>
-      </div>
     );
   }
 
@@ -167,6 +126,7 @@ export function WorldOverviewPage() {
             required
             maxLength={120}
             aria-invalid={!nameIsValid}
+            disabled={saving}
             onChange={(event) => updateDraft({ name: event.target.value })}
           />
         </div>
@@ -181,6 +141,7 @@ export function WorldOverviewPage() {
             placeholder="Custom, D&D 5e, Pathfinder…"
             value={world.game_system}
             maxLength={120}
+            disabled={saving}
             onChange={(event) => updateDraft({ game_system: event.target.value })}
           />
         </div>
@@ -196,6 +157,7 @@ export function WorldOverviewPage() {
             placeholder="Summarize the premise, tone, themes, and player-facing hook."
             value={world.description}
             maxLength={5000}
+            disabled={saving}
             onChange={(event) => updateDraft({ description: event.target.value })}
           />
           <p className="mt-1 text-right text-[11px] text-slate-500">

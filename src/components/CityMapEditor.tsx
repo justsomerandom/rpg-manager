@@ -7,10 +7,12 @@ import type { MapCity } from "../api/worldMap";
 import { ROAD_THEMES, roadName, type RoadTheme } from "./cityRoadNames";
 
 type Props = {
+  worldId: string;
   city: MapCity;
   externalConnections?: number[];
   onClose: () => void;
   onDirtyChange?: (dirty: boolean) => void;
+  onSavingChange?: (saving: boolean) => void;
 };
 
 const EMPTY_CONNECTIONS: number[] = [];
@@ -132,11 +134,16 @@ function clamp(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
 }
 
-function placeSpecialBuilding(map: CityMap, pending: PendingBuilding, coordinates: { x: number; y: number }): CityMap {
+function placeSpecialBuilding(
+  map: CityMap,
+  pending: PendingBuilding,
+  coordinates: { x: number; y: number },
+  buildingId: string
+): CityMap {
   const buildings = [
     ...map.buildings,
     {
-      id: randomId(),
+      id: buildingId,
       name: pending.name,
       kind: pending.kind,
       x: clamp(coordinates.x, 0.02, 0.98),
@@ -226,7 +233,14 @@ function synchronizeExternalConnections(
   };
 }
 
-export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, onClose, onDirtyChange }: Props) {
+export function CityMapEditor({
+  worldId,
+  city,
+  externalConnections = EMPTY_CONNECTIONS,
+  onClose,
+  onDirtyChange,
+  onSavingChange,
+}: Props) {
   const [mapData, setMapData] = useState<CityMap | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -244,6 +258,16 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
   const [dirty, setDirty] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const revisionRef = useRef(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    closeButtonRef.current?.focus();
+    return () => previouslyFocused?.focus();
+  }, []);
 
   const applyEdit = useCallback((updater: (current: CityMap) => CityMap) => {
     revisionRef.current += 1;
@@ -258,12 +282,23 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
 
   useEffect(() => {
     onDirtyChange?.(dirty);
-    return () => onDirtyChange?.(false);
   }, [dirty, onDirtyChange]);
 
   useEffect(() => {
+    onSavingChange?.(saving);
+  }, [onSavingChange, saving]);
+
+  useEffect(() => () => {
+    onDirtyChange?.(false);
+    onSavingChange?.(false);
+  }, [onDirtyChange, onSavingChange]);
+
+  useEffect(() => {
     if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
@@ -277,7 +312,7 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
     setDirty(false);
     revisionRef.current = 0;
     setBuildingName(`${city.name} Hall`);
-    getCityMap(city.id)
+    getCityMap(worldId, city.id)
       .then((existing) => {
         if (!mounted) return;
         if (existing) {
@@ -298,7 +333,7 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
     return () => {
       mounted = false;
     };
-  }, [city.id, loadAttempt]);
+  }, [city.id, externalConnections, loadAttempt, worldId]);
 
   useEffect(() => {
     if (loading || !mapData) return;
@@ -324,7 +359,8 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
     const transform = event.currentTarget.getScreenCTM();
     if (!transform) return;
     const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(transform.inverse());
-    applyEdit((current) => placeSpecialBuilding(current, placingBuilding, point));
+    const buildingId = randomId();
+    applyEdit((current) => placeSpecialBuilding(current, placingBuilding, point, buildingId));
     setPlacingBuilding(null);
     setShowDistricts(false);
     setBuildingName(`${city.name} Hall`);
@@ -339,7 +375,14 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
       edge: { x: 0.79, y: 0.5 },
       outskirts: { x: 0.9, y: 0.5 },
     };
-    applyEdit((current) => placeSpecialBuilding(current, placingBuilding, fallbackPoint[placingBuilding.district ?? "centre"]));
+    if (!mapData) return;
+    const buildingId = randomId();
+    applyEdit((current) => placeSpecialBuilding(
+      current,
+      placingBuilding,
+      fallbackPoint[placingBuilding.district ?? "centre"],
+      buildingId
+    ));
     setStatus(`${placingBuilding.name} placed. Save the city map to keep it.`);
     setPlacingBuilding(null);
     setShowDistricts(false);
@@ -349,23 +392,27 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
   const handleRandomizeRoads = () => {
     if (!mapData) return;
     const seed = Date.now();
-    applyEdit((current) => rebuildCityMap(city, current, { seed }, externalConnections));
+    const next = rebuildCityMap(city, mapData, { seed }, externalConnections);
+    applyEdit(() => next);
     setStatus("Regenerated road layout.");
   };
 
   const handleSizeChange = (size: CitySize) => {
     if (!mapData) return;
-    applyEdit((current) => rebuildCityMap(city, current, { size, seed: Date.now() }, externalConnections));
+    const next = rebuildCityMap(city, mapData, { size, seed: Date.now() }, externalConnections);
+    applyEdit(() => next);
   };
 
   const handleScaleChange = (scale: number) => {
     if (!mapData) return;
-    applyEdit((current) => rebuildCityMap(city, current, { scale }, externalConnections));
+    const next = rebuildCityMap(city, mapData, { scale }, externalConnections);
+    applyEdit(() => next);
   };
 
   const regenerateLayout = (architecture: RoadArchitecture, theme: RoadTheme) => {
     if (!mapData) return;
-    applyEdit((current) => rebuildCityMap(city, current, { architecture, theme, seed: Date.now() }, externalConnections));
+    const next = rebuildCityMap(city, mapData, { architecture, theme, seed: Date.now() }, externalConnections);
+    applyEdit(() => next);
   };
 
   const handleThemeChange = (theme: RoadTheme) => {
@@ -379,6 +426,16 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
     }));
   };
 
+  const handleRegenerateDistricts = () => {
+    if (!mapData) return;
+    const districts = generateDistricts(
+      mapData.size_label,
+      mapData.scale ?? 1,
+      mapData.road_architecture ?? "ring"
+    );
+    applyEdit((current) => ({ ...current, districts }));
+  };
+
   const saveResidentTag = () => {
     if (!mapData || !selectedResidenceId) return;
     applyEdit((current) => ({ ...current, buildings: current.buildings.map((building) => building.id === selectedResidenceId ? { ...building, role: residentTag.trim().slice(0, 120) || undefined } : building) }));
@@ -388,6 +445,10 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
 
   const updateRoadPoint = (roadId: string, pointId: string, patch: Partial<CityRoadPoint>) => {
     if (!mapData) return;
+    if (mapData.roads.find((road) => road.id === roadId)?.external_connection_index !== undefined) {
+      setStatus("World-road approaches are synchronized from the world map and cannot be reshaped here.");
+      return;
+    }
     applyEdit((current) => ({
       ...current,
       roads: current.roads.map((road) =>
@@ -405,6 +466,11 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
 
   const addRoadPoint = (roadId: string) => {
     if (!mapData) return;
+    if (mapData.roads.find((road) => road.id === roadId)?.external_connection_index !== undefined) {
+      setStatus("World-road approaches are synchronized from the world map and cannot be reshaped here.");
+      return;
+    }
+    const pointId = randomId();
     applyEdit((current) => ({
       ...current,
       roads: current.roads.map((road) =>
@@ -415,7 +481,7 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
               points: [
                 ...road.points,
                 {
-                  id: randomId(),
+                  id: pointId,
                   x: clamp((road.points[road.points.length - 1]?.x ?? 0.5) + 0.05),
                   y: clamp((road.points[road.points.length - 1]?.y ?? 0.5) + 0.05),
                 },
@@ -426,6 +492,10 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
   };
 
   const removeRoadPoint = (roadId: string, pointId: string) => {
+    if (mapData?.roads.find((road) => road.id === roadId)?.external_connection_index !== undefined) {
+      setStatus("World-road approaches are synchronized from the world map and cannot be reshaped here.");
+      return;
+    }
     applyEdit((current) => ({
       ...current,
       roads: current.roads.map((road) =>
@@ -437,6 +507,10 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
   };
 
   const removeRoad = (roadId: string) => {
+    if (mapData?.roads.find((road) => road.id === roadId)?.external_connection_index !== undefined) {
+      setStatus("Remove the connected world road to remove this city approach.");
+      return;
+    }
     applyEdit((current) => ({
       ...current,
       roads: current.roads.filter((road) => road.id !== roadId),
@@ -453,11 +527,12 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
 
   const handleSave = async () => {
     if (!mapData) return;
+    const snapshot = mapData;
     setSaving(true);
     setError(null);
     const saveRevision = revisionRef.current;
     try {
-      const saved = await saveCityMap(city.id, mapData);
+      const saved = await saveCityMap(worldId, city.id, snapshot);
       if (revisionRef.current === saveRevision) {
         setMapData(saved);
         setDirty(false);
@@ -481,13 +556,37 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-2 sm:p-6">
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="city-map-title"
         aria-busy={loading || saving}
+        tabIndex={-1}
         className="glass-panel w-full max-w-6xl h-full max-h-[96vh] sm:max-h-[92vh] flex flex-col overflow-hidden"
         onKeyDown={(event) => {
-          if (event.key === "Escape") handleRequestClose();
+          if (event.key === "Escape") {
+            event.preventDefault();
+            handleRequestClose();
+            return;
+          }
+          if (event.key !== "Tab") return;
+          const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+          ) ?? [])].filter((element) => element.getClientRects().length > 0);
+          if (!focusable.length) {
+            event.preventDefault();
+            dialogRef.current?.focus();
+            return;
+          }
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
         }}
       >
         <header className="px-5 py-4 border-b border-grove-600 flex items-center justify-between">
@@ -504,6 +603,7 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
               {dirty ? "Unsaved changes" : "All changes saved"}
             </span>
             <button
+              ref={closeButtonRef}
               type="button"
               onClick={handleRequestClose}
               disabled={saving}
@@ -711,7 +811,7 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
               </div>
               <div className="flex items-center justify-between rounded-lg border border-grove-700 bg-grove-800/40 px-3 py-2 text-xs">
                 <span>{mapData?.districts?.length ?? 0} location districts</span>
-                <div className="flex gap-2"><button type="button" onClick={() => setShowDistricts((value) => !value)} className="text-brand-glow">{showDistricts ? "Hide overlay" : "Show overlay"}</button><button type="button" onClick={() => applyEdit((current) => ({ ...current, districts: generateDistricts(current.size_label, current.scale ?? 1, current.road_architecture ?? "ring") }))} className="text-earth-sand">Regenerate</button><button type="button" onClick={() => applyEdit((current) => ({ ...current, districts: [] }))} className="text-red-300">Remove</button></div>
+                <div className="flex gap-2"><button type="button" onClick={() => setShowDistricts((value) => !value)} className="text-brand-glow">{showDistricts ? "Hide overlay" : "Show overlay"}</button><button type="button" onClick={handleRegenerateDistricts} className="text-earth-sand">Regenerate</button><button type="button" onClick={() => applyEdit((current) => ({ ...current, districts: [] }))} className="text-red-300">Remove</button></div>
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <select aria-label="Special building role" className="rounded border border-slate-700 bg-slate-900 px-2 py-2" value={specialType} onChange={(e) => setSpecialType(e.target.value)}>
@@ -759,7 +859,7 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
                   >
                     <summary className="px-3 py-2 text-xs text-slate-200 flex justify-between cursor-pointer">
                       <span>
-                        {road.name} - {road.importance}
+                        {road.name} - {road.importance}{road.external_connection_index !== undefined ? " · world approach" : ""}
                       </span>
                       <span>{road.points.length} pts</span>
                     </summary>
@@ -786,6 +886,7 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
                               max={1}
                               step={0.01}
                               value={point.x}
+                              disabled={road.external_connection_index !== undefined}
                               onChange={(e) =>
                                 updateRoadPoint(road.id, point.id, {
                                   x: Number(e.target.value),
@@ -801,6 +902,7 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
                               max={1}
                               step={0.01}
                               value={point.y}
+                              disabled={road.external_connection_index !== undefined}
                               onChange={(e) =>
                                 updateRoadPoint(road.id, point.id, {
                                   y: Number(e.target.value),
@@ -811,7 +913,7 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
                           <button
                             type="button"
                             aria-label={`Remove waypoint ${pointIndex + 1} from ${road.name}`}
-                            disabled={road.points.length <= 2}
+                            disabled={road.points.length <= 2 || road.external_connection_index !== undefined}
                             onClick={() => removeRoadPoint(road.id, point.id)}
                             className="rounded border border-red-900/60 px-2 py-1 text-red-300 disabled:opacity-30"
                           >
@@ -820,10 +922,10 @@ export function CityMapEditor({ city, externalConnections = EMPTY_CONNECTIONS, o
                         </div>
                       ))}
                       <div className="flex items-center justify-between gap-2">
-                        <button type="button" onClick={() => addRoadPoint(road.id)} className="text-[10px] text-sky-300">
+                        <button type="button" disabled={road.external_connection_index !== undefined} onClick={() => addRoadPoint(road.id)} className="text-[10px] text-sky-300 disabled:opacity-40">
                           + Add waypoint
                         </button>
-                        <button type="button" onClick={() => { if (window.confirm(`Remove ${road.name}?`)) removeRoad(road.id); }} className="text-[10px] text-red-300">
+                        <button type="button" disabled={road.external_connection_index !== undefined} onClick={() => { if (window.confirm(`Remove ${road.name}?`)) removeRoad(road.id); }} className="text-[10px] text-red-300 disabled:opacity-40">
                           Remove road
                         </button>
                       </div>

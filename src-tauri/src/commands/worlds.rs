@@ -181,8 +181,11 @@ fn delete_world_record(conn: &mut Connection, id: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to inspect the world's map: {e}"))?;
     if let Some(map_json) = map_json {
         for city_id in city_ids_from_map_json(&map_json) {
-            tx.execute("DELETE FROM city_maps WHERE city_id = ?1", [&city_id])
-                .map_err(|e| format!("Failed to remove a city map: {e}"))?;
+            tx.execute(
+                "DELETE FROM city_maps WHERE city_id = ?1 AND world_id = ?2",
+                (&city_id, id),
+            )
+            .map_err(|e| format!("Failed to remove a city map: {e}"))?;
         }
     }
     tx.execute("DELETE FROM city_maps WHERE world_id = ?1", [&id])
@@ -229,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_world_cleans_legacy_unowned_city_maps() {
+    fn deleting_a_world_cleans_its_owned_city_maps() {
         let mut conn = Connection::open_in_memory().unwrap();
         init_db(&mut conn).unwrap();
         let world = insert_world(&conn, "World".into(), "Custom".into()).unwrap();
@@ -241,8 +244,8 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO city_maps (city_id, world_id, map_json, updated_at)
-             VALUES ('city-1', NULL, '{}', 1)",
-            [],
+             VALUES ('city-1', ?1, '{}', 1)",
+            [&world.id],
         )
         .unwrap();
 

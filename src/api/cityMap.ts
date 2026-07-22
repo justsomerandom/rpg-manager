@@ -10,8 +10,8 @@ export type CityRoad = {
   id: string;
   name: string;
   importance: "main" | "secondary" | "alley";
-  tier?: 1 | 2 | 3 | 4 | 5;
-  external_connection_index?: number;
+  tier?: 1 | 2 | 3 | 4 | 5 | null;
+  external_connection_index?: number | null;
   points: CityRoadPoint[];
 };
 
@@ -22,11 +22,11 @@ export type CityBuilding = {
   x: number;
   y: number;
   footprint: number;
-  width?: number;
-  height?: number;
-  rotation?: number;
-  role?: string;
-  district?: "centre" | "midtown" | "edge" | "outskirts";
+  width?: number | null;
+  height?: number | null;
+  rotation?: number | null;
+  role?: string | null;
+  district?: "centre" | "midtown" | "edge" | "outskirts" | null;
 };
 
 export type CitySize = "village" | "town" | "city" | "megapolis";
@@ -174,23 +174,23 @@ export function normalizeCityMap(raw: CityMap, cityId: string): CityMap {
   };
 }
 
-export async function getCityMap(cityId: string): Promise<CityMap | null> {
+export async function getCityMap(worldId: string, cityId: string): Promise<CityMap | null> {
   const map = await invokeOrThrow<CityMap | null>("get_city_map", {
+    worldId,
     cityId,
-    city_id: cityId,
   });
   return map ? normalizeCityMap(map, cityId) : null;
 }
 
-export async function saveCityMap(cityId: string, map: CityMap): Promise<CityMap> {
+export async function saveCityMap(worldId: string, cityId: string, map: CityMap): Promise<CityMap> {
   const saved = await invokeOrThrow<CityMap>("save_city_map", {
+    worldId,
     cityId,
-    city_id: cityId,
     map: normalizeCityMap(map, cityId),
   });
   return normalizeCityMap(saved, cityId);
 }
 
-export async function deleteCityMap(cityId: string): Promise<void> {
-  await invokeOrThrow<void>("delete_city_map", { cityId });
+export async function deleteCityMap(worldId: string, cityId: string): Promise<void> {
+  await invokeOrThrow<void>("delete_city_map", { worldId, cityId });
 }

@@ -11,6 +11,7 @@ import {
   type WorldEntryCategory,
 } from "../../api/worldEntries";
 import { listWorldTemplates, type TemplateType, type WorldTemplate } from "../../api/templates";
+import { useCloseGuard } from "../../hooks/useCloseGuard";
 
 type JsonRecord = Record<string, unknown>;
 type ParsedTemplate = WorldTemplate & {
@@ -86,6 +87,11 @@ const normalizeTags = (raw: string | string[]) => {
   });
 };
 
+const normalizeCategory = (value: unknown): WorldEntryCategory =>
+  typeof value === "string" && (WORLD_ENTRY_CATEGORIES as readonly string[]).includes(value)
+    ? (value as WorldEntryCategory)
+    : "note";
+
 const parseMetadata = (raw: string): JsonRecord => {
   try {
     return asRecord(JSON.parse(raw || "{}")) ?? {};
@@ -118,20 +124,26 @@ const parseLegacyEntries = (raw: string | null): LegacyWikiEntry[] => {
     const entries = parsed.flatMap((candidate): LegacyWikiEntry[] => {
       const entry = asRecord(candidate);
       if (!entry || typeof entry.id !== "string" || typeof entry.title !== "string") return [];
+      const id = entry.id.trim().slice(0, 128);
+      if (!id) return [];
       const validTemplateTypes = ["character", "npc", "item", "ability", "custom_entity", "note"];
       const templateType = validTemplateTypes.includes(String(entry.templateType))
         ? (entry.templateType as TemplateType | "note")
         : "note";
       return [
         {
-          id: entry.id,
-          title: entry.title,
-          summary: readString(entry.summary),
+          id,
+          title: entry.title.trim().slice(0, 180),
+          summary: readString(entry.summary).trim().slice(0, 500),
           tags: Array.isArray(entry.tags)
             ? normalizeTags(entry.tags.filter((tag): tag is string => typeof tag === "string"))
+                .slice(0, 32)
+                .map((tag) => tag.slice(0, 64))
             : [],
           templateType,
-          updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : Date.now(),
+          updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
+            ? entry.updatedAt
+            : Date.now(),
         },
       ];
     });
@@ -177,7 +189,7 @@ const renderDefinitionRows = (template: ParsedTemplate): ReactNode => {
         const label = readString(value.label, `Field ${index + 1}`);
         const type = readString(value.type || value.inputType, "text").replace(/_/g, " ");
         return (
-          <li key={readString(value.id, `${template.id}-${index}`)} className="flex justify-between gap-3 border-b border-slate-800/70 py-1 last:border-0">
+          <li key={`${readString(value.id, `${template.id}-${index}`)}-${index}`} className="flex justify-between gap-3 border-b border-slate-800/70 py-1 last:border-0">
             <span>{label}</span>
             <span className="text-slate-500">{type}</span>
           </li>
@@ -220,6 +232,7 @@ export function WorldIndexPage() {
     }
     let cancelled = false;
     setTemplatesLoading(true);
+    setTemplates([]);
     setTemplatesError(null);
     listWorldTemplates(worldId)
       .then((data) => {
@@ -246,11 +259,14 @@ export function WorldIndexPage() {
     }
     let cancelled = false;
     setEntriesLoading(true);
+    setEntries([]);
     setEntriesLoadFailed(false);
     setEntriesError(null);
     listWorldEntries(worldId)
       .then((data) => {
-        if (!cancelled) setEntries(data);
+        if (!cancelled) {
+          setEntries(data.map((entry) => ({ ...entry, category: normalizeCategory(entry.category) })));
+        }
       })
       .catch((error) => {
         if (!cancelled) {
@@ -360,12 +376,25 @@ export function WorldIndexPage() {
       )
     : Boolean(formState.title || formState.summary || formState.body || formState.tags || formState.category !== "note");
 
-  const blocker = useBlocker(formDirty && !saving);
+  const navigationBlocked = formDirty || saving || importingLegacy || Boolean(deletingId);
+  const blocker = useBlocker(navigationBlocked);
   useEffect(() => {
     if (blocker.state !== "blocked") return;
+    if (saving || importingLegacy || deletingId) {
+      window.alert("An index operation is still in progress. Wait for it to finish before leaving this page.");
+      blocker.reset();
+      return;
+    }
     if (window.confirm("Discard the unsaved index entry and leave this page?")) blocker.proceed();
     else blocker.reset();
-  }, [blocker]);
+  }, [blocker, deletingId, importingLegacy, saving]);
+
+  useCloseGuard({
+    active: navigationBlocked,
+    pending: Boolean(saving || importingLegacy || deletingId),
+    pendingMessage: "An index operation is still in progress. Wait for it to finish before leaving this page.",
+    confirmMessage: "Discard the unsaved index entry and leave this page?",
+  });
 
   const resetEditor = () => {
     setEditingEntry(null);
@@ -377,7 +406,14 @@ export function WorldIndexPage() {
 
   const handleSaveEntry = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!worldId || saving) return;
+    if (
+      !worldId ||
+      entriesLoading ||
+      entriesLoadFailed ||
+      saving ||
+      deletingId ||
+      importingLegacy
+    ) return;
     const title = formState.title.trim();
     if (!title) {
       setEntriesError("Entry title is required.");
@@ -396,7 +432,7 @@ export function WorldIndexPage() {
           title,
           formState.summary.trim(),
           formState.body.trim(),
-          serializeMetadata(tags)
+          serializeMetadata(tags, parseMetadata(editingEntry.metadata_json))
         );
         setEntries((current) => current.map((entry) => (entry.id === updated.id ? updated : entry)));
         setMessage(`“${updated.title}” was updated.`);
@@ -429,7 +465,7 @@ export function WorldIndexPage() {
       summary: entry.summary,
       body: entry.body,
       tags: getEntryTags(entry).join(", "),
-      category: entry.category,
+      category: normalizeCategory(entry.category),
     });
     setEntriesError(null);
     setMessage(null);
@@ -437,8 +473,15 @@ export function WorldIndexPage() {
   };
 
   const handleDeleteEntry = async (entry: WorldEntry) => {
-    if (deletingId || saving) return;
-    if (!window.confirm(`Delete “${entry.title}”? This cannot be undone.`)) return;
+    if (deletingId || saving || importingLegacy) return;
+    const discardsDraft = editingEntry?.id === entry.id && formDirty;
+    if (
+      !window.confirm(
+        `Delete “${entry.title}”? This cannot be undone.${
+          discardsDraft ? " Your unsaved edits to this entry will also be discarded." : ""
+        }`
+      )
+    ) return;
     setDeletingId(entry.id);
     setEntriesError(null);
     setMessage(null);
@@ -455,7 +498,15 @@ export function WorldIndexPage() {
   };
 
   const handleImportLegacy = async () => {
-    if (!worldId || importingLegacy || entriesLoading || entriesLoadFailed || pendingLegacyEntries.length === 0) return;
+    if (
+      !worldId ||
+      importingLegacy ||
+      saving ||
+      deletingId ||
+      entriesLoading ||
+      entriesLoadFailed ||
+      pendingLegacyEntries.length === 0
+    ) return;
     setImportingLegacy(true);
     setEntriesError(null);
     setMessage(null);
@@ -517,7 +568,7 @@ export function WorldIndexPage() {
       {!entriesLoading && !entriesLoadFailed && pendingLegacyEntries.length > 0 && !legacyDismissed && (
         <section className="section-card border-amber-500/40 space-y-3" aria-labelledby="legacy-import-heading">
           <div>
-            <h3 id="legacy-import-heading" className="text-sm font-semibold text-amber-200">Local notes found</h3>
+            <h2 id="legacy-import-heading" className="text-sm font-semibold text-amber-200">Local notes found</h2>
             <p className="mt-1 text-xs text-slate-400">
               {pendingLegacyEntries.length} note{pendingLegacyEntries.length === 1 ? " is" : "s are"} stored in the older browser-only format. Import them into the campaign database so they are backed up with the rest of this world.
             </p>
@@ -571,9 +622,9 @@ export function WorldIndexPage() {
       <div className="grid items-start gap-6 lg:grid-cols-[2fr_1fr]">
         <aside ref={editorRef} className="section-card space-y-4 lg:order-2 lg:sticky lg:top-4" aria-labelledby="index-editor-heading">
           <header>
-            <h3 id="index-editor-heading" className="text-lg font-semibold text-slate-100">
+            <h2 id="index-editor-heading" className="text-lg font-semibold text-slate-100">
               {editingEntry ? "Edit index entry" : "New index entry"}
-            </h3>
+            </h2>
             <p className="mt-1 text-xs text-slate-500">Only the title is required; add detail now or grow the entry over time.</p>
           </header>
           <form className="space-y-3" onSubmit={handleSaveEntry}>
@@ -585,6 +636,7 @@ export function WorldIndexPage() {
                 value={formState.title}
                 maxLength={180}
                 required
+                disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy}
                 onChange={(event) => setFormState((current) => ({ ...current, title: event.target.value }))}
               />
             </div>
@@ -594,6 +646,7 @@ export function WorldIndexPage() {
                 id="index-entry-category"
                 className="input-field"
                 value={formState.category}
+                disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy}
                 onChange={(event) => setFormState((current) => ({ ...current, category: event.target.value as WorldEntryCategory }))}
               >
                 {WORLD_ENTRY_CATEGORIES.map((category) => (
@@ -610,6 +663,7 @@ export function WorldIndexPage() {
                 rows={2}
                 maxLength={500}
                 value={formState.summary}
+                disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy}
                 onChange={(event) => setFormState((current) => ({ ...current, summary: event.target.value }))}
               />
             </div>
@@ -622,6 +676,7 @@ export function WorldIndexPage() {
                 maxLength={20000}
                 placeholder="Write the detailed, table-ready reference here…"
                 value={formState.body}
+                disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy}
                 onChange={(event) => setFormState((current) => ({ ...current, body: event.target.value }))}
               />
             </div>
@@ -633,19 +688,20 @@ export function WorldIndexPage() {
                 placeholder="politics, session 4, unresolved"
                 value={formState.tags}
                 maxLength={500}
+                disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy}
                 onChange={(event) => setFormState((current) => ({ ...current, tags: event.target.value }))}
               />
               <p className="mt-1 text-[11px] text-slate-500">Separate tags with commas.</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button type="submit" className="primary-button" disabled={saving || !formState.title.trim()}>
+              <button type="submit" className="primary-button" disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy || !formState.title.trim()}>
                 {saving ? "Saving…" : editingEntry ? "Save changes" : "Add to index"}
               </button>
               {(editingEntry || formDirty) && (
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={saving}
+                  disabled={saving || Boolean(deletingId) || importingLegacy}
                   onClick={() => {
                     if (confirmDiscard()) resetEditor();
                   }}
@@ -660,7 +716,7 @@ export function WorldIndexPage() {
         <section className="section-card space-y-4 lg:order-1" aria-labelledby="codex-entries-heading">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <h3 id="codex-entries-heading" className="text-lg font-semibold text-slate-100">Codex entries</h3>
+              <h2 id="codex-entries-heading" className="text-lg font-semibold text-slate-100">Codex entries</h2>
               {!entriesLoading && <p className="text-xs text-slate-500">{filteredEntries.length} shown · {entries.length} total</p>}
             </div>
             {entriesLoadFailed && (
@@ -670,6 +726,8 @@ export function WorldIndexPage() {
 
           {entriesLoading ? (
             <p className="text-sm text-slate-400" role="status">Loading index entries…</p>
+          ) : entriesLoadFailed ? (
+            <p className="text-sm text-slate-500">The index is unavailable. Reload it to try again.</p>
           ) : filteredEntries.length === 0 ? (
             <p className="text-sm text-slate-500">
               {entries.length === 0 ? "No index entries yet. Use the editor to create the first one." : "No entries match the current search and category."}
@@ -683,7 +741,7 @@ export function WorldIndexPage() {
                     <header className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-300">{CATEGORY_INFO[entry.category]?.label ?? entry.category}</p>
-                        <h4 className="mt-1 text-lg font-semibold text-slate-100">{entry.title}</h4>
+                        <h3 className="mt-1 text-lg font-semibold text-slate-100">{entry.title}</h3>
                       </div>
                       <time className="shrink-0 text-[11px] text-slate-500" dateTime={new Date(entry.created_at * 1000).toISOString()}>
                         {new Date(entry.created_at * 1000).toLocaleDateString()}
@@ -697,12 +755,12 @@ export function WorldIndexPage() {
                       </ul>
                     )}
                     <div className="flex gap-3 text-xs">
-                      <button type="button" className="text-sky-300 hover:text-sky-200" onClick={() => handleEditEntry(entry)} disabled={Boolean(saving || deletingId)}>Edit</button>
+                      <button type="button" className="text-sky-300 hover:text-sky-200" onClick={() => handleEditEntry(entry)} disabled={Boolean(saving || deletingId || importingLegacy)}>Edit</button>
                       <button
                         type="button"
                         className="text-red-300 hover:text-red-200 disabled:opacity-50"
                         onClick={() => handleDeleteEntry(entry)}
-                        disabled={Boolean(saving || deletingId)}
+                        disabled={Boolean(saving || deletingId || importingLegacy)}
                         aria-label={`Delete ${entry.title}`}
                       >
                         {deletingId === entry.id ? "Deleting…" : "Delete"}
@@ -719,7 +777,7 @@ export function WorldIndexPage() {
       <section className="section-card space-y-4" aria-labelledby="template-reference-heading">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h3 id="template-reference-heading" className="text-lg font-semibold text-slate-100">Template reference</h3>
+            <h2 id="template-reference-heading" className="text-lg font-semibold text-slate-100">Template reference</h2>
             <p className="mt-1 text-xs text-slate-500">Read-only structures created with this world. The search above filters their names and fields.</p>
           </div>
           {templatesError && <button type="button" className="secondary-button text-xs" onClick={() => setTemplateReloadKey((key) => key + 1)}>Reload templates</button>}
@@ -735,7 +793,7 @@ export function WorldIndexPage() {
               <article key={type} className="rounded-xl border border-slate-800 p-4 space-y-3">
                 <header>
                   <div className="flex items-start justify-between gap-3">
-                    <h4 className="text-sm font-semibold text-slate-100">{TEMPLATE_HEADINGS[type]}</h4>
+                    <h3 className="text-sm font-semibold text-slate-100">{TEMPLATE_HEADINGS[type]}</h3>
                     <span className="text-xs text-slate-500">{filteredTemplates[type].length}</span>
                   </div>
                   <p className="mt-1 text-[11px] text-slate-500">{TEMPLATE_DESCRIPTIONS[type]}</p>
@@ -746,7 +804,7 @@ export function WorldIndexPage() {
                   <div className="space-y-2">
                     {filteredTemplates[type].map((template) => (
                       <div key={template.id} className="rounded border border-slate-800 bg-slate-900/30 p-3 space-y-2">
-                        <p className="text-sm font-medium text-slate-200">{template.name}</p>
+                        <h4 className="text-sm font-medium text-slate-200">{template.name}</h4>
                         {renderDefinitionRows(template)}
                       </div>
                     ))}

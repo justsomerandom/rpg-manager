@@ -13,6 +13,7 @@ import {
   type LoreBook,
   type LoreEntry,
 } from "../../api/lore";
+import { useCloseGuard } from "../../hooks/useCloseGuard";
 
 export function WorldLorePage() {
   const { worldId } = useParams();
@@ -142,13 +143,28 @@ export function WorldLorePage() {
     ? entryTitle !== editingEntry.title || entryContent !== editingEntry.content
     : Boolean(entryTitle || entryContent);
   const hasUnsavedWork = newBookDirty || bookEditDirty || entryDraftDirty;
+  const mutationPending =
+    creatingBook || savingBook || deletingBook || savingEntry || Boolean(deletingEntryId);
 
-  const blocker = useBlocker(hasUnsavedWork && !creatingBook && !savingBook && !savingEntry);
+  const navigationBlocked = hasUnsavedWork || mutationPending;
+  const blocker = useBlocker(navigationBlocked);
   useEffect(() => {
     if (blocker.state !== "blocked") return;
+    if (mutationPending) {
+      window.alert("A lore change is still in progress. Wait for it to finish before leaving this page.");
+      blocker.reset();
+      return;
+    }
     if (window.confirm("Discard your unsaved lore changes and leave this page?")) blocker.proceed();
     else blocker.reset();
-  }, [blocker]);
+  }, [blocker, mutationPending]);
+
+  useCloseGuard({
+    active: navigationBlocked,
+    pending: mutationPending,
+    pendingMessage: "A lore change is still in progress. Wait for it to finish before leaving this page.",
+    confirmMessage: "Discard your unsaved lore changes and leave this page?",
+  });
 
   const clearEntryEditor = () => {
     setEditingEntryId(null);
@@ -169,7 +185,7 @@ export function WorldLorePage() {
 
   const handleSelectBook = (bookId: string) => {
     if (bookId === selectedBookId) return;
-    if (creatingBook || savingBook || deletingBook || savingEntry || deletingEntryId) return;
+    if (mutationPending) return;
     if (!confirmDiscardSelectionWork()) return;
     clearBookEditor();
     clearEntryEditor();
@@ -180,7 +196,7 @@ export function WorldLorePage() {
 
   const handleCreateBook = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!worldId || creatingBook) return;
+    if (!worldId || loadingBooks || booksLoadFailed || mutationPending) return;
     const title = newBookTitle.trim();
     if (!title) {
       setBooksError("Book title is required.");
@@ -208,7 +224,7 @@ export function WorldLorePage() {
   };
 
   const startBookEdit = () => {
-    if (!selectedBook) return;
+    if (!selectedBook || mutationPending) return;
     setEditingBookId(selectedBook.id);
     setBookTitle(selectedBook.title);
     setBookSummary(selectedBook.summary);
@@ -218,7 +234,7 @@ export function WorldLorePage() {
 
   const handleUpdateBook = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!selectedBook || editingBookId !== selectedBook.id || savingBook) return;
+    if (!selectedBook || editingBookId !== selectedBook.id || mutationPending) return;
     const title = bookTitle.trim();
     if (!title) {
       setBooksError("Book title is required.");
@@ -241,9 +257,13 @@ export function WorldLorePage() {
   };
 
   const handleDeleteBook = async () => {
-    if (!selectedBook || deletingBook || savingBook || savingEntry) return;
+    if (!selectedBook || mutationPending) return;
+    const entriesDescription =
+      loadingEntries || entriesLoadFailed
+        ? "all entries inside it"
+        : `all ${entries.length} entr${entries.length === 1 ? "y" : "ies"} inside it`;
     const confirmed = window.confirm(
-      `Delete “${selectedBook.title}” and all ${entries.length} entr${entries.length === 1 ? "y" : "ies"} inside it? This cannot be undone.`
+      `Delete “${selectedBook.title}” and ${entriesDescription}? This cannot be undone.`
     );
     if (!confirmed) return;
 
@@ -269,7 +289,7 @@ export function WorldLorePage() {
 
   const handleSaveEntry = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!selectedBookId || savingEntry) return;
+    if (!selectedBookId || loadingEntries || entriesLoadFailed || mutationPending) return;
     const title = entryTitle.trim();
     const content = entryContent.trim();
     if (!title || !content) {
@@ -302,6 +322,7 @@ export function WorldLorePage() {
   };
 
   const startEntryEdit = (entry: LoreEntry) => {
+    if (mutationPending) return;
     if (editingEntryId === entry.id) return;
     if (entryDraftDirty && !window.confirm("Discard the current unsaved lore entry?")) return;
     setEditingEntryId(entry.id);
@@ -313,7 +334,7 @@ export function WorldLorePage() {
   };
 
   const handleDeleteEntry = async (entry: LoreEntry) => {
-    if (deletingEntryId || savingEntry) return;
+    if (mutationPending) return;
     if (!window.confirm(`Delete “${entry.title}”? This cannot be undone.`)) return;
     setDeletingEntryId(entry.id);
     setEntriesError(null);
@@ -357,11 +378,13 @@ export function WorldLorePage() {
               <h2 id="lore-books-heading" className="text-sm font-semibold text-slate-200">Lore books</h2>
               {!loadingBooks && <p className="mt-1 text-xs text-slate-500">{books.length} collection{books.length === 1 ? "" : "s"}</p>}
             </div>
-            {booksLoadFailed && <button type="button" className="secondary-button text-xs" onClick={() => setBooksReloadKey((key) => key + 1)}>Retry</button>}
+            {booksLoadFailed && <button type="button" className="secondary-button text-xs" disabled={mutationPending} onClick={() => setBooksReloadKey((key) => key + 1)}>Retry</button>}
           </div>
 
           {loadingBooks ? (
             <p className="text-sm text-slate-400" role="status">Loading books…</p>
+          ) : booksLoadFailed ? (
+            <p className="text-sm text-slate-500">The lore library is unavailable. Retry to load it.</p>
           ) : books.length === 0 ? (
             <p className="text-sm text-slate-500">No books yet. Create the first collection below.</p>
           ) : (
@@ -371,7 +394,7 @@ export function WorldLorePage() {
                   <button
                     type="button"
                     onClick={() => handleSelectBook(book.id)}
-                    disabled={creatingBook || savingBook || deletingBook || savingEntry || Boolean(deletingEntryId)}
+                    disabled={mutationPending}
                     aria-pressed={selectedBookId === book.id}
                     className={`w-full rounded border px-3 py-2 text-left transition ${
                       selectedBookId === book.id
@@ -398,6 +421,7 @@ export function WorldLorePage() {
                 value={newBookTitle}
                 maxLength={180}
                 required
+                disabled={loadingBooks || booksLoadFailed || mutationPending}
                 onChange={(event) => setNewBookTitle(event.target.value)}
               />
             </div>
@@ -410,10 +434,11 @@ export function WorldLorePage() {
                 placeholder="What belongs in this collection?"
                 value={newBookSummary}
                 maxLength={500}
+                disabled={loadingBooks || booksLoadFailed || mutationPending}
                 onChange={(event) => setNewBookSummary(event.target.value)}
               />
             </div>
-            <button type="submit" disabled={creatingBook || !newBookTitle.trim()} className="primary-button w-full">
+            <button type="submit" disabled={loadingBooks || booksLoadFailed || mutationPending || !newBookTitle.trim()} className="primary-button w-full">
               {creatingBook ? "Creating…" : "Create book"}
             </button>
           </form>
@@ -425,6 +450,10 @@ export function WorldLorePage() {
               {editingBookId === selectedBook.id ? (
                 <form className="space-y-3 border-b border-slate-800 pb-5" onSubmit={handleUpdateBook}>
                   <div>
+                    <p className="section-label">Selected book</p>
+                    <h2 className="mt-1 text-xl font-semibold text-slate-100">Edit lore book</h2>
+                  </div>
+                  <div>
                     <label htmlFor="edit-lore-book-title" className="block text-xs font-semibold text-slate-400 mb-1">Book title <span aria-hidden="true">*</span></label>
                     <input
                       id="edit-lore-book-title"
@@ -432,6 +461,7 @@ export function WorldLorePage() {
                       value={bookTitle}
                       maxLength={180}
                       required
+                      disabled={mutationPending}
                       onChange={(event) => setBookTitle(event.target.value)}
                     />
                   </div>
@@ -443,15 +473,16 @@ export function WorldLorePage() {
                       rows={3}
                       maxLength={500}
                       value={bookSummary}
+                      disabled={mutationPending}
                       onChange={(event) => setBookSummary(event.target.value)}
                     />
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <button type="submit" className="primary-button" disabled={savingBook || !bookTitle.trim()}>{savingBook ? "Saving…" : "Save book"}</button>
+                    <button type="submit" className="primary-button" disabled={mutationPending || !bookTitle.trim()}>{savingBook ? "Saving…" : "Save book"}</button>
                     <button
                       type="button"
                       className="secondary-button"
-                      disabled={savingBook}
+                      disabled={mutationPending}
                       onClick={() => {
                         if (!bookEditDirty || window.confirm("Discard changes to this book?")) clearBookEditor();
                       }}
@@ -468,12 +499,12 @@ export function WorldLorePage() {
                     <p className="mt-1 text-sm text-slate-400">{selectedBook.summary || "No summary yet."}</p>
                   </div>
                   <div className="flex shrink-0 gap-2">
-                    <button type="button" className="secondary-button text-xs" onClick={startBookEdit} disabled={savingEntry || deletingBook}>Edit book</button>
+                    <button type="button" className="secondary-button text-xs" onClick={startBookEdit} disabled={mutationPending}>Edit book</button>
                     <button
                       type="button"
                       className="text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
                       onClick={handleDeleteBook}
-                      disabled={deletingBook || savingEntry}
+                      disabled={mutationPending}
                     >
                       {deletingBook ? "Deleting…" : "Delete book"}
                     </button>
@@ -491,6 +522,7 @@ export function WorldLorePage() {
                     <button
                       type="button"
                       className="secondary-button text-xs"
+                      disabled={mutationPending}
                       onClick={() => {
                         if (!entryDraftDirty || window.confirm("Discard the current entry draft and retry loading?")) {
                           clearEntryEditor();
@@ -505,6 +537,8 @@ export function WorldLorePage() {
 
                 {loadingEntries ? (
                   <p className="text-sm text-slate-400" role="status">Loading entries…</p>
+                ) : entriesLoadFailed ? (
+                  <p className="text-sm text-slate-500">This book's entries are unavailable. Retry to load them.</p>
                 ) : entries.length === 0 ? (
                   <p className="text-sm text-slate-500">No entries yet. Write the first chapter below.</p>
                 ) : (
@@ -519,12 +553,12 @@ export function WorldLorePage() {
                             </time>
                           </div>
                           <div className="flex gap-3 text-xs">
-                            <button type="button" className="text-sky-300 hover:text-sky-200" onClick={() => startEntryEdit(entry)} disabled={Boolean(savingEntry || deletingEntryId)}>Edit</button>
+                            <button type="button" className="text-sky-300 hover:text-sky-200" onClick={() => startEntryEdit(entry)} disabled={mutationPending}>Edit</button>
                             <button
                               type="button"
                               className="text-red-300 hover:text-red-200 disabled:opacity-50"
                               onClick={() => handleDeleteEntry(entry)}
-                              disabled={Boolean(savingEntry || deletingEntryId)}
+                              disabled={mutationPending}
                               aria-label={`Delete ${entry.title}`}
                             >
                               {deletingEntryId === entry.id ? "Deleting…" : "Delete"}
@@ -552,6 +586,7 @@ export function WorldLorePage() {
                       value={entryTitle}
                       maxLength={180}
                       required
+                      disabled={loadingEntries || entriesLoadFailed || mutationPending}
                       onChange={(event) => setEntryTitle(event.target.value)}
                     />
                   </div>
@@ -564,20 +599,21 @@ export function WorldLorePage() {
                       value={entryContent}
                       maxLength={50000}
                       required
+                      disabled={loadingEntries || entriesLoadFailed || mutationPending}
                       placeholder="Write the chapter or lore text here…"
                       onChange={(event) => setEntryContent(event.target.value)}
                     />
                     <p className="mt-1 text-right text-[11px] text-slate-500">{entryContent.length.toLocaleString()} / 50,000</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <button type="submit" className="primary-button" disabled={savingEntry || !entryTitle.trim() || !entryContent.trim()}>
+                    <button type="submit" className="primary-button" disabled={loadingEntries || entriesLoadFailed || mutationPending || !entryTitle.trim() || !entryContent.trim()}>
                       {savingEntry ? "Saving…" : editingEntry ? "Save entry" : "Add entry"}
                     </button>
                     {entryDraftDirty && (
                       <button
                         type="button"
                         className="secondary-button"
-                        disabled={savingEntry}
+                        disabled={mutationPending}
                         onClick={() => {
                           if (window.confirm("Discard this unsaved lore entry?")) clearEntryEditor();
                         }}
@@ -591,6 +627,11 @@ export function WorldLorePage() {
             </>
           ) : loadingBooks ? (
             <p className="text-sm text-slate-400" role="status">Loading lore library…</p>
+          ) : booksLoadFailed ? (
+            <div className="py-10 text-center">
+              <h2 className="text-lg font-semibold text-slate-200">Lore library unavailable</h2>
+              <p className="mt-2 text-sm text-slate-500">Retry from the books panel to load this world's lore.</p>
+            </div>
           ) : (
             <div className="py-10 text-center">
               <h2 className="text-lg font-semibold text-slate-200">Start a lore collection</h2>

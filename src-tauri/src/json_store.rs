@@ -5,6 +5,15 @@ use serde::Serialize;
 
 const MAX_STORED_JSON_BYTES: usize = 64 * 1024 * 1024;
 
+pub fn encode_json<T: Serialize>(payload: &T) -> Result<String, String> {
+    let encoded =
+        serde_json::to_string(payload).map_err(|e| format!("Failed to encode JSON: {e}"))?;
+    if encoded.len() > MAX_STORED_JSON_BYTES {
+        return Err("JSON payload exceeds the 64 MiB storage limit".into());
+    }
+    Ok(encoded)
+}
+
 fn validate_sql_identifier(identifier: &str) -> Result<(), String> {
     if identifier.is_empty()
         || !identifier
@@ -69,11 +78,7 @@ pub fn upsert_json_by_key<T: Serialize>(
     validate_sql_identifier(key_column)?;
     validate_sql_identifier(json_column)?;
     validate_sql_identifier(updated_at_column)?;
-    let encoded =
-        serde_json::to_string(payload).map_err(|e| format!("Failed to encode JSON: {e}"))?;
-    if encoded.len() > MAX_STORED_JSON_BYTES {
-        return Err("JSON payload exceeds the 64 MiB storage limit".into());
-    }
+    let encoded = encode_json(payload)?;
     let now = Utc::now().timestamp();
 
     let query = format!(

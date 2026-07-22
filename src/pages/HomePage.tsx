@@ -1,8 +1,9 @@
 ﻿import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useBlocker } from "react-router-dom";
 import { getErrorMessage } from "../api/client";
 import { createWorldWithTemplates, deleteWorld, listWorlds, type World } from "../api/worlds";
 import type { TemplateDefinitionPayload } from "../api/templates";
+import { useCloseGuard } from "../hooks/useCloseGuard";
 
 const makeId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -142,9 +143,52 @@ export function HomePage() {
   const [message, setMessage] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [templates, setTemplates] = useState<TemplateState>(() => defaultTemplates());
+  const cleanTemplatesRef = useRef<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [deletingWorldId, setDeletingWorldId] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const reviewTriggerRef = useRef<HTMLButtonElement>(null);
+  const creatingRef = useRef(creating);
+
+  if (cleanTemplatesRef.current === null) {
+    cleanTemplatesRef.current = JSON.stringify(templates);
+  }
+
+  const draftDirty =
+    Boolean(newName) ||
+    gameSystem !== "Custom" ||
+    JSON.stringify(templates) !== cleanTemplatesRef.current;
+  const mutationPending = creating || Boolean(deletingWorldId);
+  const navigationBlocked = draftDirty || mutationPending;
+  const blocker = useBlocker(navigationBlocked);
+
+  useEffect(() => {
+    creatingRef.current = creating;
+  }, [creating]);
+
+  useEffect(() => {
+    if (blocker.state !== "blocked") return;
+    if (mutationPending) {
+      window.alert(
+        creating
+          ? "Your world is still being created. Wait for it to finish before leaving this page."
+          : "A world is still being deleted. Wait for it to finish before leaving this page."
+      );
+      blocker.reset();
+      return;
+    }
+    if (window.confirm("Discard this unsaved world setup and leave the page?")) blocker.proceed();
+    else blocker.reset();
+  }, [blocker, creating, mutationPending]);
+
+  useCloseGuard({
+    active: navigationBlocked,
+    pending: mutationPending,
+    pendingMessage: creating
+      ? "Your world is still being created. Wait for it to finish before leaving this page."
+      : "A world is still being deleted. Wait for it to finish before leaving this page.",
+    confirmMessage: "Discard this unsaved world setup and leave the page?",
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -172,7 +216,7 @@ export function HomePage() {
     dialogRef.current?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !creating) {
+      if (event.key === "Escape" && !creatingRef.current) {
         event.preventDefault();
         setReviewOpen(false);
         return;
@@ -199,8 +243,9 @@ export function HomePage() {
     return () => {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
+      reviewTriggerRef.current?.focus();
     };
-  }, [creating, reviewOpen]);
+  }, [reviewOpen]);
 
   const customEntityOptions = useMemo(
     () =>
@@ -580,9 +625,11 @@ export function HomePage() {
   };
 
   const resetForm = () => {
+    const nextTemplates = defaultTemplates();
+    cleanTemplatesRef.current = JSON.stringify(nextTemplates);
     setNewName("");
     setGameSystem("Custom");
-    setTemplates(defaultTemplates());
+    setTemplates(nextTemplates);
   };
 
   const handleOpenReview = (event?: FormEvent<HTMLFormElement>) => {
@@ -702,7 +749,7 @@ export function HomePage() {
               onChange={(event) => setGameSystem(event.target.value)}
             />
           </div>
-          <button type="submit" disabled={!newName.trim() || creating} className="primary-button">
+          <button ref={reviewTriggerRef} type="submit" disabled={!newName.trim() || creating} className="primary-button">
             Review setup
           </button>
         </form>
@@ -792,6 +839,7 @@ export function HomePage() {
 
             {reviewError && <p className="status-error" role="alert" aria-live="assertive">{reviewError}</p>}
 
+            <fieldset disabled={creating} className="space-y-6" aria-busy={creating}>
             <section className="space-y-3">
               <header>
                 <h3 className="text-sm font-semibold text-slate-200">
@@ -1210,6 +1258,7 @@ export function HomePage() {
                 + Add custom entity template
               </button>
             </section>
+            </fieldset>
 
             <div className="sticky bottom-0 -mx-6 flex justify-end gap-2 border-t border-slate-800 bg-slate-950/95 px-6 py-4 backdrop-blur">
               <button type="button" className="secondary-button" onClick={handleCloseReview} disabled={creating}>
