@@ -58,6 +58,21 @@ git diff --check                                   passed
 
 The production build reported only stale Browserslist/Baseline metadata notices; it produced the release assets successfully.
 
+## Focused landing and world-selector redesign
+
+The first feature-focused redesign pass rebuilt the desktop landing surface around its primary returning-user outcome: choosing a world quickly and safely.
+
+- Replaced the competing create/list panels with a responsive world-card library, concise masthead, accurate local-storage indicator, real creation metadata, and clear Open versus Delete actions.
+- Added polished skeleton, empty, partial-load warning, retry, success, per-world deletion, and accessible live-feedback states without adding search, sorting, or unsupported campaign statistics.
+- Rebuilt creation as a two-step native dialog. Users can accept useful starter defaults immediately or progressively disclose a one-section-at-a-time advanced editor.
+- Split setup types, defaults, validation, payload construction, and editor UI out of the landing-page orchestrator. Dirty state is explicit instead of serializing the complete setup on every render.
+- Added byte-accurate name validation, template/field capacity limits, payload-size checks aligned with the backend, focused validation summaries, field associations, draft-discard protection, and an undo for resetting template customization.
+- Replaced browser world-deletion and landing-page window-close prompts with accessible in-app dialogs; deletion preserves progress and failure feedback until the operation resolves.
+- Protected list loading from stale create/delete races and guarded rapid duplicate create/delete activation.
+- Added stable template keys so character custom-entity references survive atomic persistence; the backend now rejects duplicate, conflicting, missing, and dangling references.
+
+Focused verification passed `npm run check`, `npm run build`, `cargo fmt -- --check`, `cargo test --all-targets --locked` (26 tests), and `git diff --check`. Headless-browser renders at 1440 px and 500 px widths, plus all creation-wizard stages, were inspected for hierarchy, spacing, contrast, dialog scrolling, and responsive behavior.
+
 ## Remaining risks
 
 - **No user-facing backup/restore or export.** The SQLite file can be backed up manually, but recovery is not yet a guided product flow.

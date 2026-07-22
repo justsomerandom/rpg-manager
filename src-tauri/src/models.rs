@@ -63,6 +63,8 @@ pub struct WorldTemplate {
 pub struct TemplateInput {
     pub template_type: String,
     pub name: String,
+    #[serde(default)]
+    pub client_key: Option<String>,
     pub definition: Value,
 }
 

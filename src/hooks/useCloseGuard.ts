@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type CloseGuardOptions = {
@@ -6,6 +6,18 @@ type CloseGuardOptions = {
   confirmMessage: string;
   pending?: boolean;
   pendingMessage?: string;
+  interactive?: boolean;
+};
+
+export type CloseGuardRequest = {
+  kind: "confirm" | "pending" | "notice";
+  message: string;
+};
+
+type CloseGuardController = {
+  closeRequest: CloseGuardRequest | null;
+  dismissCloseRequest: () => void;
+  confirmCloseRequest: () => Promise<void>;
 };
 
 const isTauriRuntime = () =>
@@ -21,8 +33,16 @@ export function useCloseGuard({
   confirmMessage,
   pending = false,
   pendingMessage = "A change is still in progress. Wait for it to finish before closing the app.",
-}: CloseGuardOptions) {
+  interactive = false,
+}: CloseGuardOptions): CloseGuardController {
   const allowCloseRef = useRef(false);
+  const [closeRequest, setCloseRequest] = useState<CloseGuardRequest | null>(null);
+
+  useEffect(() => {
+    if (!active || (closeRequest?.kind === "pending" && !pending)) {
+      setCloseRequest(null);
+    }
+  }, [active, closeRequest?.kind, pending]);
 
   useEffect(() => {
     allowCloseRef.current = false;
@@ -41,9 +61,17 @@ export function useCloseGuard({
     if (isTauriRuntime()) {
       void getCurrentWindow()
         .onCloseRequested((event) => {
+          if (allowCloseRef.current) return;
           if (pending) {
             event.preventDefault();
-            window.alert(pendingMessage);
+            if (interactive) setCloseRequest({ kind: "pending", message: pendingMessage });
+            else window.alert(pendingMessage);
+            return;
+          }
+
+          if (interactive) {
+            event.preventDefault();
+            setCloseRequest({ kind: "confirm", message: confirmMessage });
             return;
           }
 
@@ -69,5 +97,24 @@ export function useCloseGuard({
       window.removeEventListener("beforeunload", handleBeforeUnload);
       unlisten?.();
     };
-  }, [active, confirmMessage, pending, pendingMessage]);
+  }, [active, confirmMessage, interactive, pending, pendingMessage]);
+
+  const dismissCloseRequest = useCallback(() => setCloseRequest(null), []);
+
+  const confirmCloseRequest = useCallback(async () => {
+    if (closeRequest?.kind !== "confirm") return;
+    allowCloseRef.current = true;
+    setCloseRequest(null);
+    try {
+      await getCurrentWindow().close();
+    } catch {
+      allowCloseRef.current = false;
+      setCloseRequest({
+        kind: "notice",
+        message: "The application could not close. Keep working and try again.",
+      });
+    }
+  }, [closeRequest?.kind]);
+
+  return { closeRequest, dismissCloseRequest, confirmCloseRequest };
 }

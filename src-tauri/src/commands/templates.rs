@@ -1,5 +1,8 @@
+use std::collections::HashSet;
+
 use chrono::Utc;
 use rusqlite::Connection;
+use serde_json::Value;
 use tauri::State;
 use uuid::Uuid;
 
@@ -39,14 +42,51 @@ pub(crate) fn prepare_templates(
 
     let mut prepared = Vec::with_capacity(templates.len());
     let mut total_bytes = 0usize;
-    for input in templates {
+    let mut client_keys = HashSet::new();
+    let mut custom_entity_keys = HashSet::new();
+    let mut custom_entity_references = Vec::new();
+    for mut input in templates {
         let template_type = validate_template_type(input.template_type)?;
         let name = validate_name(input.name, "Template name")?;
-        if !input.definition.is_object() {
+        let Some(definition) = input.definition.as_object_mut() else {
             return Err(format!(
                 "Definition for template '{name}' must be a JSON object"
             ));
+        };
+
+        let embedded_key = match definition.get("template_key") {
+            Some(Value::String(key)) => Some(key.clone()),
+            Some(_) => {
+                return Err(format!("Template key inside '{name}' must be a string"));
+            }
+            None => None,
+        };
+        let client_key = match (input.client_key, embedded_key) {
+            (Some(client_key), Some(embedded_key)) if client_key.trim() != embedded_key.trim() => {
+                return Err(format!(
+                    "Template key for '{name}' conflicts with its saved definition"
+                ));
+            }
+            (Some(client_key), _) | (None, Some(client_key)) => {
+                Some(validate_id(client_key, "Template key")?)
+            }
+            (None, None) => None,
+        };
+
+        if let Some(client_key) = &client_key {
+            if !client_keys.insert(client_key.clone()) {
+                return Err(format!("Duplicate template key: {client_key}"));
+            }
+            definition.insert("template_key".to_owned(), Value::String(client_key.clone()));
+            if template_type == "custom_entity" {
+                custom_entity_keys.insert(client_key.clone());
+            }
         }
+
+        if template_type == "character" {
+            collect_custom_entity_references(definition, &name, &mut custom_entity_references)?;
+        }
+
         let definition_json = serde_json::to_string(&input.definition)
             .map_err(|e| format!("Invalid definition for template '{name}': {e}"))?;
         validate_text(
@@ -66,7 +106,51 @@ pub(crate) fn prepare_templates(
             definition_json,
         });
     }
+
+    for (template_name, reference) in custom_entity_references {
+        if !custom_entity_keys.contains(&reference) {
+            return Err(format!(
+                "Character template '{template_name}' references an unknown custom entity key: {reference}"
+            ));
+        }
+    }
+
     Ok(prepared)
+}
+
+fn collect_custom_entity_references(
+    definition: &serde_json::Map<String, Value>,
+    template_name: &str,
+    references: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    let Some(features) = definition.get("features") else {
+        return Ok(());
+    };
+    let Some(features) = features.as_array() else {
+        return Ok(());
+    };
+
+    for feature in features {
+        let Some(feature) = feature.as_object() else {
+            continue;
+        };
+        if feature.get("type").and_then(Value::as_str) != Some("custom_entity") {
+            continue;
+        }
+        let reference = feature
+            .get("entityId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                format!(
+                    "Custom entity feature in character template '{template_name}' needs an entityId"
+                )
+            })?;
+        references.push((
+            template_name.to_owned(),
+            validate_id(reference.to_owned(), "Custom entity reference")?,
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn insert_prepared_templates(
@@ -202,6 +286,7 @@ mod tests {
         let unknown = TemplateInput {
             template_type: "spell".into(),
             name: "Spell".into(),
+            client_key: None,
             definition: serde_json::json!({}),
         };
         assert!(prepare_templates(vec![unknown]).is_err());
@@ -209,8 +294,76 @@ mod tests {
         let array = TemplateInput {
             template_type: "item".into(),
             name: "Item".into(),
+            client_key: None,
             definition: serde_json::json!([]),
         };
         assert!(prepare_templates(vec![array]).is_err());
+    }
+
+    #[test]
+    fn persists_stable_template_keys_and_validates_custom_entity_references() {
+        let character = TemplateInput {
+            template_type: "character".into(),
+            name: "Character Sheet".into(),
+            client_key: None,
+            definition: serde_json::json!({
+                "features": [{
+                    "id": "feature-1",
+                    "label": "Allegiance",
+                    "type": "custom_entity",
+                    "entityId": "faction-template"
+                }]
+            }),
+        };
+        let custom_entity = TemplateInput {
+            template_type: "custom_entity".into(),
+            name: "Faction".into(),
+            client_key: Some("faction-template".into()),
+            definition: serde_json::json!({"fields": []}),
+        };
+
+        let prepared = prepare_templates(vec![character, custom_entity]).unwrap();
+        let custom_definition: Value = serde_json::from_str(&prepared[1].definition_json).unwrap();
+        assert_eq!(
+            custom_definition
+                .get("template_key")
+                .and_then(Value::as_str),
+            Some("faction-template")
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_and_duplicate_template_keys() {
+        let character = TemplateInput {
+            template_type: "character".into(),
+            name: "Character Sheet".into(),
+            client_key: Some("shared-key".into()),
+            definition: serde_json::json!({
+                "features": [{"type": "custom_entity", "entityId": "missing-key"}]
+            }),
+        };
+        let custom_entity = TemplateInput {
+            template_type: "custom_entity".into(),
+            name: "Faction".into(),
+            client_key: Some("shared-key".into()),
+            definition: serde_json::json!({"fields": []}),
+        };
+        let error = prepare_templates(vec![character, custom_entity])
+            .err()
+            .expect("duplicate keys should be rejected");
+        assert!(error.contains("Duplicate template key"));
+
+        let unresolved_character = TemplateInput {
+            template_type: "character".into(),
+            name: "Character Sheet".into(),
+            client_key: None,
+            definition: serde_json::json!({
+                "features": [{"type": "custom_entity", "entityId": "missing-key"}]
+            }),
+        };
+        let error = prepare_templates(vec![unresolved_character])
+            .err()
+            .expect("unknown references should be rejected");
+        assert!(error.contains("unknown custom entity key"));
     }
 }

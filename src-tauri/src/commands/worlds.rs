@@ -215,6 +215,7 @@ mod tests {
         let prepared = prepare_templates(vec![TemplateInput {
             template_type: "character".into(),
             name: "Sheet".into(),
+            client_key: None,
             definition: serde_json::json!({"fields": []}),
         }])
         .unwrap();

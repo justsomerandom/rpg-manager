@@ -19,6 +19,12 @@ export type WorldTemplate = {
 export type TemplateDefinitionPayload = {
   template_type: TemplateType;
   name: string;
+  /**
+   * Stable key used by references inside template definitions. Database record
+   * IDs are generated during persistence and must not be used for references
+   * assembled before the save.
+   */
+  client_key?: string;
   definition: unknown;
 };
 
