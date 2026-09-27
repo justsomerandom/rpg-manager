@@ -5,7 +5,14 @@ module.exports = {
     extend: {
       fontFamily: {
         sans: ["Inter", "ui-sans-serif", "system-ui", "Segoe UI", "sans-serif"],
-        display: ["Aptos Display", "Segoe UI Variable Display", "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        display: [
+          "Aptos Display",
+          "Segoe UI Variable Display",
+          "Inter",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+        ],
       },
       colors: {
         slate: {

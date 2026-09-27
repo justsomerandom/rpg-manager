@@ -168,12 +168,7 @@ const BUILDING_COLORS: Record<NormalizedBuildingKind, string> = {
   landmark: "#9f614b",
 };
 
-type NormalizedBuildingKind =
-  | "residential"
-  | "commercial"
-  | "industrial"
-  | "civic"
-  | "landmark";
+type NormalizedBuildingKind = "residential" | "commercial" | "industrial" | "civic" | "landmark";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -189,9 +184,7 @@ function safePositive(value: unknown, fallback: number): number {
 }
 
 function safeText(value: unknown, fallback = "", maxLength = 80): string {
-  return typeof value === "string" && value.trim()
-    ? value.trim().slice(0, maxLength)
-    : fallback;
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, maxLength) : fallback;
 }
 
 function validPoint(point: { x: number; y: number } | undefined | null): point is Point {
@@ -199,7 +192,7 @@ function validPoint(point: { x: number; y: number } | undefined | null): point i
 }
 
 function normalizeSeed(seed: unknown): number {
-  return (Math.trunc(finite(seed, 1)) >>> 0) || 1;
+  return Math.trunc(finite(seed, 1)) >>> 0 || 1;
 }
 
 function hashText(value: string): number {
@@ -238,11 +231,7 @@ function mixColor(first: string, second: string, amount: number): string {
   const b = parseHex(second);
   if (!a || !b) return second;
   const t = clamp(amount, 0, 1);
-  return toHex(
-    a[0] + (b[0] - a[0]) * t,
-    a[1] + (b[1] - a[1]) * t,
-    a[2] + (b[2] - a[2]) * t
-  );
+  return toHex(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t);
 }
 
 function alphaColor(color: string, alpha: number): string {
@@ -282,7 +271,7 @@ function layoutRect(canvas: HTMLCanvasElement): DOMRect | null {
 function resolveSurface(
   canvas: HTMLCanvasElement,
   options: CityRenderOptions,
-  resize: boolean
+  resize: boolean,
 ): Surface {
   const rectangle = layoutRect(canvas);
   const browserDpr = typeof window === "undefined" ? 1 : finite(window.devicePixelRatio, 1);
@@ -290,14 +279,20 @@ function resolveSurface(
   const layoutWidth = rectangle && rectangle.width > 0 ? rectangle.width : canvas.clientWidth;
   const layoutHeight = rectangle && rectangle.height > 0 ? rectangle.height : canvas.clientHeight;
   const width = clamp(
-    safePositive(options.viewport?.width, layoutWidth > 0 ? layoutWidth : canvas.width / dpr || 800),
+    safePositive(
+      options.viewport?.width,
+      layoutWidth > 0 ? layoutWidth : canvas.width / dpr || 800,
+    ),
     1,
-    16384
+    16384,
   );
   const height = clamp(
-    safePositive(options.viewport?.height, layoutHeight > 0 ? layoutHeight : canvas.height / dpr || 600),
+    safePositive(
+      options.viewport?.height,
+      layoutHeight > 0 ? layoutHeight : canvas.height / dpr || 600,
+    ),
     1,
-    16384
+    16384,
   );
 
   if (resize) {
@@ -321,7 +316,7 @@ function projectedLocal(point: Point, mode: CityViewMode, squash: number): Point
 function createTransform(
   surface: Surface,
   map: Pick<CityMap, "width" | "height">,
-  options: CityRenderOptions
+  options: CityRenderOptions,
 ): ViewTransform {
   const mode = options.viewMode ?? "topdown";
   const width = safePositive(map.width, 1);
@@ -329,9 +324,12 @@ function createTransform(
   const squash = clamp(finite(options.isometricSquash, 0.56), 0.3, 0.85);
   const zoom = clamp(safePositive(options.viewport?.zoom, 1), 0.2, 12);
   const padding = clamp(
-    finite(options.viewport?.padding, Math.max(22, Math.min(surface.width, surface.height) * 0.055)),
+    finite(
+      options.viewport?.padding,
+      Math.max(22, Math.min(surface.width, surface.height) * 0.055),
+    ),
     0,
-    Math.min(surface.width, surface.height) * 0.44
+    Math.min(surface.width, surface.height) * 0.44,
   );
   const availableWidth = Math.max(1, surface.width - padding * 2);
   const availableHeight = Math.max(1, surface.height - padding * 2);
@@ -347,7 +345,7 @@ function createTransform(
   const maxY = Math.max(...corners.map((point) => point.y));
   const scale = Math.min(
     availableWidth / Math.max(0.0001, maxX - minX),
-    availableHeight / Math.max(0.0001, maxY - minY)
+    availableHeight / Math.max(0.0001, maxY - minY),
   );
   return {
     mode,
@@ -458,7 +456,12 @@ function polygonCentroid(points: ReadonlyArray<Point>): Point {
   return { x: x / (3 * area), y: y / (3 * area) };
 }
 
-function screenBounds(points: ReadonlyArray<Point>): { minX: number; minY: number; maxX: number; maxY: number } {
+function screenBounds(points: ReadonlyArray<Point>): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+} {
   return {
     minX: Math.min(...points.map((point) => point.x)),
     minY: Math.min(...points.map((point) => point.y)),
@@ -472,7 +475,7 @@ function drawGround(
   surface: Surface,
   transform: ViewTransform,
   map: CityMap,
-  background: string
+  background: string,
 ): void {
   context.fillStyle = /^#[0-9a-f]{6}$/i.test(background) ? background : "#0c211b";
   context.fillRect(0, 0, surface.width, surface.height);
@@ -504,7 +507,7 @@ function drawGround(
   for (let index = 0; index < fleckCount; index += 1) {
     const point = cityToScreen(
       { x: randomUnit(seed, index * 3), y: randomUnit(seed, index * 3 + 1) },
-      transform
+      transform,
     );
     const radius = 0.3 + randomUnit(seed, index * 3 + 2) * 1.05;
     context.moveTo(point.x + radius, point.y);
@@ -518,7 +521,7 @@ function drawGround(
   for (let index = 0; index < Math.min(42, Math.ceil(fleckCount / 6)); index += 1) {
     const start = cityToScreen(
       { x: randomUnit(seed, 2000 + index * 4), y: randomUnit(seed, 2001 + index * 4) },
-      transform
+      transform,
     );
     const length = 4 + randomUnit(seed, 2002 + index * 4) * 16;
     const angle = randomUnit(seed, 2003 + index * 4) * TAU;
@@ -548,7 +551,7 @@ function drawDistrictPattern(
   context: CanvasRenderingContext2D,
   kind: CityDistrict["kind"],
   bounds: ReturnType<typeof screenBounds>,
-  color: string
+  color: string,
 ): void {
   const width = bounds.maxX - bounds.minX;
   const height = bounds.maxY - bounds.minY;
@@ -628,7 +631,7 @@ function drawDistricts(
   context: CanvasRenderingContext2D,
   map: CityMap,
   transform: ViewTransform,
-  labels: LabelCandidate[]
+  labels: LabelCandidate[],
 ): number {
   let count = 0;
   for (const district of map.districts ?? []) {
@@ -708,7 +711,7 @@ function longestRoadSegment(points: ReadonlyArray<Point>): { point: Point; lengt
 function drawBridgeSleepers(
   context: CanvasRenderingContext2D,
   points: ReadonlyArray<Point>,
-  width: number
+  width: number,
 ): void {
   context.strokeStyle = "rgba(61, 57, 44, 0.72)";
   context.lineWidth = 0.8;
@@ -740,7 +743,7 @@ function drawRoads(
   context: CanvasRenderingContext2D,
   map: CityMap,
   transform: ViewTransform,
-  labels: LabelCandidate[]
+  labels: LabelCandidate[],
 ): number {
   const roads = map.roads
     .filter((road) => road.points.filter(validPoint).length >= 2)
@@ -760,11 +763,12 @@ function drawRoads(
   for (const entry of projected) {
     const width = roadSurfaceWidth(entry.road, transform.zoom);
     linePath(context, entry.points);
-    context.strokeStyle = entry.road.importance === "alley"
-      ? "#a99d7e"
-      : roadIsApproach(entry.road)
-        ? "#c9b986"
-        : "#c8ba91";
+    context.strokeStyle =
+      entry.road.importance === "alley"
+        ? "#a99d7e"
+        : roadIsApproach(entry.road)
+          ? "#c9b986"
+          : "#c8ba91";
     context.lineWidth = width;
     context.stroke();
   }
@@ -799,7 +803,11 @@ function drawRoads(
   return projected.length;
 }
 
-function buildingDimensions(building: CityBuilding): { width: number; depth: number; rotation: number } {
+function buildingDimensions(building: CityBuilding): {
+  width: number;
+  depth: number;
+  rotation: number;
+} {
   const footprint = clamp(safePositive(building.footprint, 0.012), 0.002, 0.25);
   return {
     width: clamp(safePositive(building.width, footprint), 0.002, 0.25),
@@ -854,12 +862,14 @@ function elevationForBuilding(
   building: CityBuilding,
   kind: NormalizedBuildingKind,
   transform: ViewTransform,
-  maximum: number
+  maximum: number,
 ): number {
   if (transform.mode !== "isometric" || maximum <= 0) return 0;
   const dimensions = buildingDimensions(building);
-  const footprintPixels = Math.sqrt(dimensions.width * dimensions.depth) * transform.scale * transform.zoom;
-  const kindFactor = kind === "landmark" ? 1.05 : kind === "civic" ? 0.78 : kind === "industrial" ? 0.48 : 0.58;
+  const footprintPixels =
+    Math.sqrt(dimensions.width * dimensions.depth) * transform.scale * transform.zoom;
+  const kindFactor =
+    kind === "landmark" ? 1.05 : kind === "civic" ? 0.78 : kind === "industrial" ? 0.48 : 0.58;
   return clamp(1.5 + footprintPixels * kindFactor, 1.5, maximum);
 }
 
@@ -868,7 +878,7 @@ function drawBuildingDetail(
   roof: ReadonlyArray<Point>,
   kind: NormalizedBuildingKind,
   color: string,
-  variation: number
+  variation: number,
 ): void {
   if (roof.length < 4) return;
   const bounds = screenBounds(roof);
@@ -933,7 +943,7 @@ function drawBuildings(
   surface: Surface,
   transform: ViewTransform,
   labels: LabelCandidate[],
-  maxExtrusion: number
+  maxExtrusion: number,
 ): { rendered: number; culled: number } {
   const seed = normalizeSeed(map.seed);
   const buildings = map.buildings
@@ -954,11 +964,18 @@ function drawBuildings(
     const identitySeed = seed ^ hashText(building.id);
     const variation = randomUnit(identitySeed, 0);
     const baseColor = BUILDING_COLORS[kind];
-    const color = mixColor(baseColor, variation > 0.58 ? "#c0a276" : "#6f6250", 0.08 + variation * 0.12);
+    const color = mixColor(
+      baseColor,
+      variation > 0.58 ? "#c0a276" : "#6f6250",
+      0.08 + variation * 0.12,
+    );
     const elevation = elevationForBuilding(building, kind, transform, maxExtrusion);
     const roof = elevation > 0 ? shifted(base, 0, -elevation) : base;
 
-    polygonPath(context, shifted(base, elevation > 0 ? elevation * 0.5 : 1.3, elevation > 0 ? elevation * 0.72 : 1.8));
+    polygonPath(
+      context,
+      shifted(base, elevation > 0 ? elevation * 0.5 : 1.3, elevation > 0 ? elevation * 0.72 : 1.8),
+    );
     context.fillStyle = "rgba(35, 37, 30, 0.2)";
     context.fill();
 
@@ -969,9 +986,8 @@ function drawBuildings(
         const midpointY = (base[index].y + base[nextIndex].y) / 2;
         if (midpointY < baseCentre.y - 0.25) continue;
         polygonPath(context, [base[index], base[nextIndex], roof[nextIndex], roof[index]]);
-        context.fillStyle = index % 2 === 0
-          ? mixColor(color, "#383b35", 0.36)
-          : mixColor(color, "#51483c", 0.27);
+        context.fillStyle =
+          index % 2 === 0 ? mixColor(color, "#383b35", 0.36) : mixColor(color, "#51483c", 0.27);
         context.fill();
       }
     }
@@ -985,7 +1001,11 @@ function drawBuildings(
     drawBuildingDetail(context, roof, kind, color, variation);
 
     if (buildingHasUsefulLabel(building, kind)) {
-      const label = safeText(building.role || building.name, kind === "landmark" ? "Landmark" : "", 58);
+      const label = safeText(
+        building.role || building.name,
+        kind === "landmark" ? "Landmark" : "",
+        58,
+      );
       if (label) {
         labels.push({
           text: label,
@@ -1006,7 +1026,7 @@ function roundedRectanglePath(
   y: number,
   width: number,
   height: number,
-  radius: number
+  radius: number,
 ): void {
   const safeRadius = Math.min(radius, width / 2, height / 2);
   context.beginPath();
@@ -1024,7 +1044,7 @@ function roundedRectanglePath(
 
 function rectanglesOverlap(
   first: { x: number; y: number; width: number; height: number },
-  second: { x: number; y: number; width: number; height: number }
+  second: { x: number; y: number; width: number; height: number },
 ): boolean {
   return !(
     first.x + first.width < second.x ||
@@ -1038,7 +1058,7 @@ function drawLabels(
   context: CanvasRenderingContext2D,
   labels: LabelCandidate[],
   surface: Surface,
-  layers: CityLayerVisibility
+  layers: CityLayerVisibility,
 ): number {
   const occupied: Array<{ x: number; y: number; width: number; height: number }> = [];
   let rendered = 0;
@@ -1075,9 +1095,11 @@ function drawLabels(
       continue;
     }
     roundedRectanglePath(context, rectangle.x, rectangle.y, rectangle.width, rectangle.height, 4);
-    context.fillStyle = label.style === "road" ? "rgba(232, 218, 179, 0.84)" : "rgba(239, 229, 198, 0.9)";
+    context.fillStyle =
+      label.style === "road" ? "rgba(232, 218, 179, 0.84)" : "rgba(239, 229, 198, 0.9)";
     context.fill();
-    context.strokeStyle = label.style === "district" ? "rgba(68, 70, 56, 0.38)" : "rgba(69, 60, 45, 0.3)";
+    context.strokeStyle =
+      label.style === "district" ? "rgba(68, 70, 56, 0.38)" : "rgba(69, 60, 45, 0.3)";
     context.lineWidth = 0.65;
     context.stroke();
     context.fillStyle = label.style === "district" ? "#3f493c" : "#423d31";
@@ -1101,7 +1123,7 @@ function drawFeatureOutline(
   transform: ViewTransform,
   reference: CityFeatureRef,
   color: string,
-  dashed: boolean
+  dashed: boolean,
 ): void {
   context.save();
   context.strokeStyle = color;
@@ -1112,7 +1134,10 @@ function drawFeatureOutline(
   if (reference.kind === "district") {
     const district = map.districts?.find((item) => item.id === reference.id);
     if (district) {
-      polygonPath(context, districtPoints(district).map((point) => cityToScreen(point, transform)));
+      polygonPath(
+        context,
+        districtPoints(district).map((point) => cityToScreen(point, transform)),
+      );
       context.stroke();
     }
   } else if (reference.kind === "road") {
@@ -1125,7 +1150,10 @@ function drawFeatureOutline(
   } else {
     const building = map.buildings.find((item) => item.id === reference.id);
     if (building) {
-      polygonPath(context, buildingCorners(building).map((point) => cityToScreen(point, transform)));
+      polygonPath(
+        context,
+        buildingCorners(building).map((point) => cityToScreen(point, transform)),
+      );
       context.stroke();
     }
   }
@@ -1136,7 +1164,7 @@ function drawEditorOverlays(
   context: CanvasRenderingContext2D,
   map: CityMap,
   transform: ViewTransform,
-  overlays: CityEditorOverlayOptions
+  overlays: CityEditorOverlayOptions,
 ): void {
   if (overlays.hovered) {
     drawFeatureOutline(context, map, transform, overlays.hovered, "rgba(244, 218, 143, 0.9)", true);
@@ -1145,9 +1173,8 @@ function drawEditorOverlays(
     drawFeatureOutline(context, map, transform, overlays.selected, "#f0bd58", false);
   }
 
-  const nodeRoadId = overlays.roadNodeRoadId ?? (
-    overlays.selected?.kind === "road" ? overlays.selected.id : null
-  );
+  const nodeRoadId =
+    overlays.roadNodeRoadId ?? (overlays.selected?.kind === "road" ? overlays.selected.id : null);
   if (overlays.showRoadNodes && nodeRoadId) {
     const road = map.roads.find((item) => item.id === nodeRoadId);
     if (road) {
@@ -1164,7 +1191,8 @@ function drawEditorOverlays(
     }
   }
 
-  const draft = overlays.draftRoad?.filter(validPoint).map((point) => cityToScreen(point, transform)) ?? [];
+  const draft =
+    overlays.draftRoad?.filter(validPoint).map((point) => cityToScreen(point, transform)) ?? [];
   if (draft.length) {
     linePath(context, draft);
     context.strokeStyle = "#f0bd58";
@@ -1188,7 +1216,11 @@ function now(): number {
   return typeof performance === "undefined" ? Date.now() : performance.now();
 }
 
-function emptyStats(surface: Surface, options: CityRenderOptions, startedAt: number): CityRenderStats {
+function emptyStats(
+  surface: Surface,
+  options: CityRenderOptions,
+  startedAt: number,
+): CityRenderStats {
   return {
     contextAvailable: false,
     viewMode: options.viewMode ?? "topdown",
@@ -1212,7 +1244,7 @@ function emptyStats(surface: Surface, options: CityRenderOptions, startedAt: num
 export function drawCityMap(
   canvas: HTMLCanvasElement,
   map: CityMap,
-  options: CityRenderOptions = {}
+  options: CityRenderOptions = {},
 ): CityRenderStats {
   const startedAt = now();
   const surface = resolveSurface(canvas, options, options.resizeCanvas !== false);
@@ -1255,7 +1287,7 @@ export function drawCityMap(
       surface,
       transform,
       labels,
-      clamp(finite(options.maxBuildingExtrusion, 11), 0, 28)
+      clamp(finite(options.maxBuildingExtrusion, 11), 0, 28),
     );
     renderedBuildings = buildingResult.rendered;
     culledBuildings = buildingResult.culled;
@@ -1291,18 +1323,19 @@ export function screenToCityPoint(
   map: Pick<CityMap, "width" | "height">,
   screenX: number,
   screenY: number,
-  options: CityRenderOptions = {}
+  options: CityRenderOptions = {},
 ): Point | null {
   if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return null;
   const surface = resolveSurface(canvas, options, false);
   const rectangle = layoutRect(canvas);
   const coordinates = options.pointerCoordinates ?? "client";
-  const canvasPoint = coordinates === "client"
-    ? {
-        x: screenX - finite(rectangle?.left, 0),
-        y: screenY - finite(rectangle?.top, 0),
-      }
-    : { x: screenX, y: screenY };
+  const canvasPoint =
+    coordinates === "client"
+      ? {
+          x: screenX - finite(rectangle?.left, 0),
+          y: screenY - finite(rectangle?.top, 0),
+        }
+      : { x: screenX, y: screenY };
   const point = screenToCity(canvasPoint, createTransform(surface, map, options));
   if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
   if (options.clampPointerToBounds) {
@@ -1319,18 +1352,22 @@ function pointSegmentDistance(point: Point, start: Point, end: Point): number {
   const projection = clamp(
     ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared,
     0,
-    1
+    1,
   );
   return Math.hypot(point.x - (start.x + dx * projection), point.y - (start.y + dy * projection));
 }
 
 function pointInPolygon(point: Point, polygon: ReadonlyArray<Point>): boolean {
   let inside = false;
-  for (let current = 0, previous = polygon.length - 1; current < polygon.length; previous = current, current += 1) {
+  for (
+    let current = 0, previous = polygon.length - 1;
+    current < polygon.length;
+    previous = current, current += 1
+  ) {
     const a = polygon[current];
     const b = polygon[previous];
     const intersects =
-      (a.y > point.y) !== (b.y > point.y) &&
+      a.y > point.y !== b.y > point.y &&
       point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y || Number.EPSILON) + a.x;
     if (intersects) inside = !inside;
   }
@@ -1341,7 +1378,10 @@ function polygonDistance(point: Point, polygon: ReadonlyArray<Point>): number {
   if (pointInPolygon(point, polygon)) return 0;
   let distance = Number.POSITIVE_INFINITY;
   for (let index = 0; index < polygon.length; index += 1) {
-    distance = Math.min(distance, pointSegmentDistance(point, polygon[index], polygon[(index + 1) % polygon.length]));
+    distance = Math.min(
+      distance,
+      pointSegmentDistance(point, polygon[index], polygon[(index + 1) % polygon.length]),
+    );
   }
   return distance;
 }
@@ -1366,7 +1406,7 @@ function buildingDistance(point: Point, building: CityBuilding): number {
 export function hitTestCityFeature(
   map: CityMap,
   point: Point,
-  options: CityHitTestOptions = {}
+  options: CityHitTestOptions = {},
 ): CityFeatureHit | null {
   if (!validPoint(point)) return null;
   const tolerance = clamp(finite(options.tolerance, 0.012), 0, 0.25);
@@ -1394,8 +1434,12 @@ export function hitTestCityFeature(
       const points = road.points.filter(validPoint);
       for (let index = 0; index < points.length - 1; index += 1) {
         const distance = pointSegmentDistance(point, points[index], points[index + 1]);
-        const importanceAllowance = road.importance === "main" ? 0.004 : road.importance === "secondary" ? 0.002 : 0;
-        if (distance <= tolerance + importanceAllowance && (!nearestRoad || distance < nearestRoad.distance)) {
+        const importanceAllowance =
+          road.importance === "main" ? 0.004 : road.importance === "secondary" ? 0.002 : 0;
+        if (
+          distance <= tolerance + importanceAllowance &&
+          (!nearestRoad || distance < nearestRoad.distance)
+        ) {
           nearestRoad = { kind: "road", id: road.id, feature: road, distance, segmentIndex: index };
         }
       }

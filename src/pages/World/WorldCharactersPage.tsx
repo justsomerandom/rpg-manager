@@ -60,11 +60,17 @@ const parseTemplate = (name: string, rawDefinition: string): CharacterTemplate =
   const parsedFeatures = rawFeatures.flatMap((candidate, index): CharacterFeature[] => {
     if (!candidate || typeof candidate !== "object") return [];
     const feature = candidate as Record<string, unknown>;
-    if (typeof feature.label !== "string" || !feature.label.trim() || !isFeatureType(feature.type)) {
+    if (
+      typeof feature.label !== "string" ||
+      !feature.label.trim() ||
+      !isFeatureType(feature.type)
+    ) {
       return [];
     }
-    const min = typeof feature.min === "number" && Number.isFinite(feature.min) ? feature.min : undefined;
-    const max = typeof feature.max === "number" && Number.isFinite(feature.max) ? feature.max : undefined;
+    const min =
+      typeof feature.min === "number" && Number.isFinite(feature.min) ? feature.min : undefined;
+    const max =
+      typeof feature.max === "number" && Number.isFinite(feature.max) ? feature.max : undefined;
     return [
       {
         id: typeof feature.id === "string" && feature.id ? feature.id : `feature-${index}`,
@@ -226,7 +232,7 @@ export function WorldCharactersPage() {
 
   const editingCharacter = useMemo(
     () => characters.find((character) => character.id === editingId) ?? null,
-    [characters, editingId]
+    [characters, editingId],
   );
   const editDirty = useMemo(() => {
     if (!editingCharacter) return false;
@@ -244,7 +250,9 @@ export function WorldCharactersPage() {
   useEffect(() => {
     if (blocker.state !== "blocked") return;
     if (creating || savingId || deletingId) {
-      window.alert("A character change is still in progress. Wait for it to finish before leaving this page.");
+      window.alert(
+        "A character change is still in progress. Wait for it to finish before leaving this page.",
+      );
       blocker.reset();
       return;
     }
@@ -258,7 +266,8 @@ export function WorldCharactersPage() {
   useCloseGuard({
     active: navigationBlocked,
     pending: Boolean(creating || savingId || deletingId),
-    pendingMessage: "A character change is still in progress. Wait for it to finish before leaving this page.",
+    pendingMessage:
+      "A character change is still in progress. Wait for it to finish before leaving this page.",
     confirmMessage: "Discard your unsaved character changes and leave this page?",
   });
 
@@ -310,7 +319,8 @@ export function WorldCharactersPage() {
   };
 
   const cancelEditing = () => {
-    if (!editDirty || window.confirm("Discard your unsaved character-sheet changes?")) resetEditor();
+    if (!editDirty || window.confirm("Discard your unsaved character-sheet changes?"))
+      resetEditor();
   };
 
   const setAttribute = (featureId: string, value: string | number | boolean | undefined) => {
@@ -339,10 +349,10 @@ export function WorldCharactersPage() {
         editingCharacter.id,
         name,
         editNotes.trim(),
-        JSON.stringify(editAttributes)
+        JSON.stringify(editAttributes),
       );
       setCharacters((current) =>
-        current.map((character) => (character.id === updated.id ? updated : character))
+        current.map((character) => (character.id === updated.id ? updated : character)),
       );
       resetEditor();
       setMessage(`${updated.name}'s sheet was saved.`);
@@ -356,7 +366,7 @@ export function WorldCharactersPage() {
   const handleDelete = async (character: Character) => {
     if (deletingId || savingId || creating) return;
     const confirmed = window.confirm(
-      `Delete “${character.name}”? This permanently removes their notes and sheet data.`
+      `Delete “${character.name}”? This permanently removes their notes and sheet data.`,
     );
     if (!confirmed) return;
 
@@ -406,7 +416,8 @@ export function WorldCharactersPage() {
       return (
         <div key={feature.id}>
           <label htmlFor={inputId} className="block text-xs font-semibold text-slate-400 mb-1">
-            {feature.label} <span className="font-normal text-slate-500">({formatFeatureType(feature)})</span>
+            {feature.label}{" "}
+            <span className="font-normal text-slate-500">({formatFeatureType(feature)})</span>
           </label>
           <input
             id={inputId}
@@ -419,7 +430,10 @@ export function WorldCharactersPage() {
             onChange={(event) => {
               const next = event.target.value;
               const numeric = next === "" ? undefined : Number(next);
-              setAttribute(feature.id, typeof numeric === "number" && Number.isFinite(numeric) ? numeric : undefined);
+              setAttribute(
+                feature.id,
+                typeof numeric === "number" && Number.isFinite(numeric) ? numeric : undefined,
+              );
             }}
           />
         </div>
@@ -429,7 +443,8 @@ export function WorldCharactersPage() {
     return (
       <div key={feature.id}>
         <label htmlFor={inputId} className="block text-xs font-semibold text-slate-400 mb-1">
-          {feature.label} <span className="font-normal text-slate-500">({FEATURE_LABELS[feature.type]})</span>
+          {feature.label}{" "}
+          <span className="font-normal text-slate-500">({FEATURE_LABELS[feature.type]})</span>
         </label>
         <input
           id={inputId}
@@ -456,17 +471,26 @@ export function WorldCharactersPage() {
       </header>
 
       <div aria-live="polite">
-        {charactersError && <p className="status-error" role="alert">{charactersError}</p>}
+        {charactersError && (
+          <p className="status-error" role="alert">
+            {charactersError}
+          </p>
+        )}
         {message && <p className="status-success">{message}</p>}
       </div>
 
       <section className="section-card space-y-3" aria-labelledby="add-character-heading">
-        <h2 id="add-character-heading" className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+        <h2
+          id="add-character-heading"
+          className="text-xs font-semibold text-slate-400 uppercase tracking-wide"
+        >
           Add character
         </h2>
         <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleCreate}>
           <div className="flex-1">
-            <label htmlFor="new-character-name" className="sr-only">Character name</label>
+            <label htmlFor="new-character-name" className="sr-only">
+              Character name
+            </label>
             <input
               id="new-character-name"
               className="input-field"
@@ -483,7 +507,14 @@ export function WorldCharactersPage() {
           </div>
           <button
             type="submit"
-            disabled={creating || loading || charactersLoadFailed || Boolean(savingId || deletingId) || !worldId || !newName.trim()}
+            disabled={
+              creating ||
+              loading ||
+              charactersLoadFailed ||
+              Boolean(savingId || deletingId) ||
+              !worldId ||
+              !newName.trim()
+            }
             className="primary-button"
           >
             {creating ? "Adding…" : "Add character"}
@@ -494,28 +525,44 @@ export function WorldCharactersPage() {
       <section className="section-card space-y-3" aria-labelledby="character-template-heading">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h2 id="character-template-heading" className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+            <h2
+              id="character-template-heading"
+              className="text-xs font-semibold text-slate-400 uppercase tracking-wide"
+            >
               Character template
             </h2>
-            <p className="mt-1 text-xs text-slate-500">This sheet structure is shared by every hero in the world.</p>
+            <p className="mt-1 text-xs text-slate-500">
+              This sheet structure is shared by every hero in the world.
+            </p>
           </div>
           {templateError && (
-            <button type="button" className="secondary-button text-xs" onClick={() => setTemplateReloadKey((key) => key + 1)}>
+            <button
+              type="button"
+              className="secondary-button text-xs"
+              onClick={() => setTemplateReloadKey((key) => key + 1)}
+            >
               Retry template
             </button>
           )}
         </div>
         {templateLoading ? (
-          <p className="text-sm text-slate-500" role="status">Loading template…</p>
+          <p className="text-sm text-slate-500" role="status">
+            Loading template…
+          </p>
         ) : templateError ? (
-          <p className="status-error" role="alert">{templateError}</p>
+          <p className="status-error" role="alert">
+            {templateError}
+          </p>
         ) : template ? (
           <div className="space-y-2">
             <p className="text-sm font-semibold text-slate-200">{template.name}</p>
             {template.features.length > 0 ? (
               <ul className="grid gap-2 sm:grid-cols-2">
                 {template.features.map((feature) => (
-                  <li key={feature.id} className="flex justify-between gap-3 rounded border border-slate-800 px-3 py-2 text-xs">
+                  <li
+                    key={feature.id}
+                    className="flex justify-between gap-3 rounded border border-slate-800 px-3 py-2 text-xs"
+                  >
                     <span className="text-slate-300">{feature.label}</span>
                     <span className="text-slate-500">{formatFeatureType(feature)}</span>
                   </li>
@@ -526,29 +573,44 @@ export function WorldCharactersPage() {
             )}
           </div>
         ) : (
-          <p className="text-sm text-slate-500">No character template is stored for this world. Names and notes can still be managed.</p>
+          <p className="text-sm text-slate-500">
+            No character template is stored for this world. Names and notes can still be managed.
+          </p>
         )}
       </section>
 
       <section className="section-card space-y-3" aria-labelledby="characters-heading">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 id="characters-heading" className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+            <h2
+              id="characters-heading"
+              className="text-xs font-semibold text-slate-400 uppercase tracking-wide"
+            >
               Characters
             </h2>
-            {!loading && <p className="mt-1 text-xs text-slate-500">{characters.length} in this party</p>}
+            {!loading && (
+              <p className="mt-1 text-xs text-slate-500">{characters.length} in this party</p>
+            )}
           </div>
           {charactersLoadFailed && worldId && (
-            <button type="button" className="secondary-button text-xs" onClick={() => setCharactersReloadKey((key) => key + 1)}>
+            <button
+              type="button"
+              className="secondary-button text-xs"
+              onClick={() => setCharactersReloadKey((key) => key + 1)}
+            >
               Reload roster
             </button>
           )}
         </div>
 
         {loading ? (
-          <p className="text-sm text-slate-400" role="status">Loading characters…</p>
+          <p className="text-sm text-slate-400" role="status">
+            Loading characters…
+          </p>
         ) : charactersLoadFailed ? (
-          <p className="text-sm text-slate-500">The roster is unavailable. Reload it to try again.</p>
+          <p className="text-sm text-slate-500">
+            The roster is unavailable. Reload it to try again.
+          </p>
         ) : characters.length === 0 ? (
           <p className="text-sm text-slate-500">No characters yet. Add the first hero above.</p>
         ) : (
@@ -561,7 +623,10 @@ export function WorldCharactersPage() {
                     <form className="space-y-4" onSubmit={handleUpdate}>
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div>
-                          <label htmlFor={`edit-name-${character.id}`} className="block text-xs font-semibold text-slate-400 mb-1">
+                          <label
+                            htmlFor={`edit-name-${character.id}`}
+                            className="block text-xs font-semibold text-slate-400 mb-1"
+                          >
                             Character name <span aria-hidden="true">*</span>
                           </label>
                           <input
@@ -575,7 +640,10 @@ export function WorldCharactersPage() {
                           />
                         </div>
                         <div>
-                          <label htmlFor={`edit-notes-${character.id}`} className="block text-xs font-semibold text-slate-400 mb-1">
+                          <label
+                            htmlFor={`edit-notes-${character.id}`}
+                            className="block text-xs font-semibold text-slate-400 mb-1"
+                          >
                             Notes
                           </label>
                           <textarea
@@ -593,13 +661,16 @@ export function WorldCharactersPage() {
 
                       {invalidStoredAttributes && (
                         <p className="status-error" role="alert">
-                          The previous sheet data was invalid. Saving will replace it with the values below.
+                          The previous sheet data was invalid. Saving will replace it with the
+                          values below.
                         </p>
                       )}
 
                       {template && template.features.length > 0 && (
                         <fieldset className="space-y-3">
-                          <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400">Sheet values</legend>
+                          <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                            Sheet values
+                          </legend>
                           <div className="grid gap-3 sm:grid-cols-2">
                             {template.features.map(renderFeatureInput)}
                           </div>
@@ -607,10 +678,19 @@ export function WorldCharactersPage() {
                       )}
 
                       <div className="flex flex-wrap gap-2">
-                        <button type="submit" className="primary-button" disabled={Boolean(savingId || creating || deletingId) || !editName.trim()}>
+                        <button
+                          type="submit"
+                          className="primary-button"
+                          disabled={Boolean(savingId || creating || deletingId) || !editName.trim()}
+                        >
                           {savingId === character.id ? "Saving…" : "Save sheet"}
                         </button>
-                        <button type="button" className="secondary-button" disabled={Boolean(savingId || creating || deletingId)} onClick={cancelEditing}>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={Boolean(savingId || creating || deletingId)}
+                          onClick={cancelEditing}
+                        >
                           Cancel
                         </button>
                       </div>
@@ -622,24 +702,43 @@ export function WorldCharactersPage() {
                         <p className="mt-1 text-xs text-slate-500">
                           Added {new Date(character.created_at * 1000).toLocaleDateString()}
                         </p>
-                        {character.notes && <p className="mt-2 whitespace-pre-wrap text-sm text-slate-300">{character.notes}</p>}
-                        {template && (() => {
-                          const attributes = parseAttributes(character.attributes_json).attributes;
-                          const populated = template.features.filter((feature) => attributes[feature.id] !== undefined);
-                          return populated.length > 0 ? (
-                            <dl className="mt-3 grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
-                              {populated.map((feature) => (
-                                <div key={feature.id} className="flex justify-between gap-3 border-b border-slate-800/60 py-1">
-                                  <dt className="text-slate-500">{feature.label}</dt>
-                                  <dd className="max-w-48 truncate text-slate-300">{formatAttributeValue(attributes[feature.id])}</dd>
-                                </div>
-                              ))}
-                            </dl>
-                          ) : null;
-                        })()}
+                        {character.notes && (
+                          <p className="mt-2 whitespace-pre-wrap text-sm text-slate-300">
+                            {character.notes}
+                          </p>
+                        )}
+                        {template &&
+                          (() => {
+                            const attributes = parseAttributes(
+                              character.attributes_json,
+                            ).attributes;
+                            const populated = template.features.filter(
+                              (feature) => attributes[feature.id] !== undefined,
+                            );
+                            return populated.length > 0 ? (
+                              <dl className="mt-3 grid gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
+                                {populated.map((feature) => (
+                                  <div
+                                    key={feature.id}
+                                    className="flex justify-between gap-3 border-b border-slate-800/60 py-1"
+                                  >
+                                    <dt className="text-slate-500">{feature.label}</dt>
+                                    <dd className="max-w-48 truncate text-slate-300">
+                                      {formatAttributeValue(attributes[feature.id])}
+                                    </dd>
+                                  </div>
+                                ))}
+                              </dl>
+                            ) : null;
+                          })()}
                       </div>
                       <div className="flex shrink-0 gap-2">
-                        <button type="button" className="secondary-button text-xs" onClick={() => startEditing(character)} disabled={Boolean(savingId || deletingId || creating)}>
+                        <button
+                          type="button"
+                          className="secondary-button text-xs"
+                          onClick={() => startEditing(character)}
+                          disabled={Boolean(savingId || deletingId || creating)}
+                        >
                           Edit sheet
                         </button>
                         <button

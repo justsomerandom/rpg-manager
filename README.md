@@ -2,7 +2,7 @@
 
 RPG Manager is an offline, desktop-first campaign and worldbuilding workspace. It combines campaign metadata, template-driven character sheets, a searchable world codex, long-form lore books, and procedural world/city map editors in one local application.
 
-## Stack
+## Technology
 
 - React 19, TypeScript, Vite, and Tailwind CSS
 - Tauri 2 for the desktop shell and typed command bridge
@@ -10,7 +10,7 @@ RPG Manager is an offline, desktop-first campaign and worldbuilding workspace. I
 
 There is no server, account, telemetry, cloud sync, or multiplayer layer. A `World` is the ownership boundary for all campaign data.
 
-## Product areas
+## Features
 
 - **Worlds:** atomic world/template creation, metadata editing, world listing, and confirmed cascading deletion.
 - **Characters:** a world roster with editable notes and values rendered from the saved character-sheet template.
@@ -31,6 +31,24 @@ React route/component
 
 Relational tables store ownership and queryable records. Flexible template and map documents are serialized as JSON in SQLite. Backend commands validate identifiers, text sizes, JSON structure, map dimensions, coordinates, collection sizes, and ownership before writing.
 
+The repository keeps the standard Tauri project layout:
+
+```text
+.
+├── src/                  # React and TypeScript frontend
+│   ├── api/              # Typed Tauri command boundary
+│   ├── components/       # Shared UI components
+│   ├── features/         # Feature-specific logic and UI
+│   ├── pages/            # Route-level screens
+│   └── state/            # Shared client state
+├── src-tauri/            # Rust backend and desktop application
+│   ├── capabilities/     # Tauri permissions
+│   └── src/              # Commands, models, validation, and storage
+└── docs/                 # Project documentation
+```
+
+`src-tauri` is Tauri's conventional application directory and is intentionally not renamed to a generic `backend` directory.
+
 ## Development
 
 Prerequisites:
@@ -39,24 +57,34 @@ Prerequisites:
 - A current stable Rust toolchain
 - The platform prerequisites required by Tauri 2
 
-Install and run:
+Install the locked dependencies and run the desktop application:
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
-Useful checks:
+Use `npm run dev:web` only for frontend work that does not require persistence or Tauri commands.
+
+Run the complete local validation suite and production frontend build before committing:
 
 ```bash
 npm run check
 npm run build
-cd src-tauri
-cargo test
-cargo check
+git diff --check
 ```
 
-`npm run dev:web` starts only Vite. Persistence calls require the Tauri runtime, so use `npm run dev` for functional application testing.
+Useful focused commands:
+
+| Command                | Purpose                                                                 |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `npm run typecheck`    | Check TypeScript without emitting files                                 |
+| `npm run lint`         | Run ESLint and Clippy with warnings denied                              |
+| `npm run format`       | Format supported frontend, configuration, documentation, and Rust files |
+| `npm run format:check` | Verify Prettier and rustfmt formatting                                  |
+| `npm test`             | Run the Rust test suite                                                 |
+
+See [AGENTS.md](./AGENTS.md) for repository conventions and contribution guidance. Continuous integration runs the same checks for pushes to `main` and pull requests.
 
 ## Local data and security
 
@@ -66,6 +94,6 @@ The production webview uses a restrictive content security policy. The applicati
 
 Back up the database file before installing experimental builds or making large campaign changes. Schema v3 moves legacy city-plan rows that cannot be linked unambiguously into `quarantined_city_maps` for manual recovery instead of exposing or deleting them; user-facing export/restore is not implemented yet.
 
-## Audit notes
+## Documentation
 
-See [AUDIT.md](./AUDIT.md) for the production-hardening summary, verification record, and known residual risks.
+- [Production hardening audit](./docs/production-audit.md) — historical verification record and known residual risks from the July 2026 audit.

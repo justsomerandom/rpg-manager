@@ -41,7 +41,7 @@ export function generateVegetationLayer(
   width: number,
   height: number,
   seed: number,
-  moisture: number[]
+  moisture: number[],
 ) {
   const layer: number[] = new Array(width * height);
   for (let y = 0; y < height; y += 1) {
@@ -50,7 +50,10 @@ export function generateVegetationLayer(
       const nx = x / Math.max(1, width - 1) - 0.5;
       const ny = y / Math.max(1, height - 1) - 0.5;
       const noiseValue = fbm(nx * 4 - 80, ny * 4 + 120, seed + 733);
-      const base = (Number.isFinite(moisture[idx]) ? moisture[idx] : 0.5) * 0.6 + (1 - Math.abs(ny)) * 0.2 + noiseValue * 0.2;
+      const base =
+        (Number.isFinite(moisture[idx]) ? moisture[idx] : 0.5) * 0.6 +
+        (1 - Math.abs(ny)) * 0.2 +
+        noiseValue * 0.2;
       layer[idx] = clamp(base);
     }
   }
@@ -61,13 +64,24 @@ export function generateProceduralMap(
   seed: number,
   waterLevel = DEFAULT_WATER_LEVEL,
   width = MAP_DEFAULT_SIZE,
-  height = MAP_DEFAULT_SIZE
+  height = MAP_DEFAULT_SIZE,
 ): MapStateExtended {
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 8 || height < 8 || width > 256 || height > 256) {
+  if (
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    width < 8 ||
+    height < 8 ||
+    width > 256 ||
+    height > 256
+  ) {
     throw new Error("Map dimensions must be whole numbers between 8 and 256.");
   }
   const safeSeed = Number.isSafeInteger(seed) && seed >= 0 ? seed : Date.now();
-  const safeWaterLevel = clamp(Number.isFinite(waterLevel) ? waterLevel : DEFAULT_WATER_LEVEL, 0.05, 0.95);
+  const safeWaterLevel = clamp(
+    Number.isFinite(waterLevel) ? waterLevel : DEFAULT_WATER_LEVEL,
+    0.05,
+    0.95,
+  );
   const relief: number[] = new Array(width * height);
   const moisture: number[] = new Array(width * height);
   for (let y = 0; y < height; y += 1) {
@@ -100,9 +114,10 @@ export function generateProceduralMap(
 
 export function normalizeLayer(values: number[], width: number, height: number) {
   const total = width * height;
-  const source = Array.isArray(values) && values.length === total
-    ? values.map((value) => clamp(Number.isFinite(value) ? value : 0.5))
-    : new Array(total).fill(0.5);
+  const source =
+    Array.isArray(values) && values.length === total
+      ? values.map((value) => clamp(Number.isFinite(value) ? value : 0.5))
+      : new Array(total).fill(0.5);
   const smoothed = smoothLayer(source, width, height, 1);
   let min = Infinity;
   let max = -Infinity;
@@ -117,28 +132,45 @@ export function normalizeLayer(values: number[], width: number, height: number) 
 export function ensureExtendedMap(map: MapState): MapStateExtended {
   const width = Number(map.width);
   const height = Number(map.height);
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 8 || height < 8 || width > 256 || height > 256) {
-    throw new Error("Saved map dimensions are invalid or unsupported (expected 8-256 cells per side).");
+  if (
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    width < 8 ||
+    height < 8 ||
+    width > 256 ||
+    height > 256
+  ) {
+    throw new Error(
+      "Saved map dimensions are invalid or unsupported (expected 8-256 cells per side).",
+    );
   }
   const total = width * height;
   const extended = map as MapStateExtended;
   const seed = Number.isSafeInteger(map.seed) && map.seed >= 0 ? map.seed : Date.now();
-  const waterLevel = clamp(Number.isFinite(map.water_level) ? map.water_level : DEFAULT_WATER_LEVEL, 0.05, 0.95);
+  const waterLevel = clamp(
+    Number.isFinite(map.water_level) ? map.water_level : DEFAULT_WATER_LEVEL,
+    0.05,
+    0.95,
+  );
   const fallback = generateProceduralMap(seed, waterLevel, width, height);
   const sanitizeLayer = (values: unknown, fallbackValues: number[]) =>
     Array.isArray(values) && values.length === total
       ? values.map((value, index) =>
           typeof value === "number" && Number.isFinite(value)
             ? clamp(value)
-            : fallbackValues[index]
+            : fallbackValues[index],
         )
       : fallbackValues;
   const relief = sanitizeLayer(map.relief, fallback.relief);
   const moisture = sanitizeLayer(map.moisture, fallback.moisture);
-  const temperature =
-    sanitizeLayer(extended.temperature, generateTemperatureLayer(width, height, seed + 777));
-  const vegetation =
-    sanitizeLayer(extended.vegetation, generateVegetationLayer(width, height, seed + 999, moisture));
+  const temperature = sanitizeLayer(
+    extended.temperature,
+    generateTemperatureLayer(width, height, seed + 777),
+  );
+  const vegetation = sanitizeLayer(
+    extended.vegetation,
+    generateVegetationLayer(width, height, seed + 999, moisture),
+  );
   const compiledImage = (value: unknown) =>
     typeof value === "string" &&
     value.length <= 24 * 1024 * 1024 &&
@@ -156,15 +188,22 @@ export function ensureExtendedMap(map: MapState): MapStateExtended {
     const y = clamp(city.y, 0.5 / height, 1 - 0.5 / height);
     const gridX = clamp(Math.floor(x * width), 0, width - 1);
     const gridY = clamp(Math.floor(y * height), 0, height - 1);
-    return [{
-      id: typeof city.id === "string" && city.id ? city.id.slice(0, 128) : `city-${index}`,
-      name: typeof city.name === "string" && city.name.trim() ? city.name.trim().slice(0, 120) : `City ${index + 1}`,
-      kind: locationKinds.has(city.kind ?? "") ? city.kind : "settlement",
-      x,
-      y,
-      elevation: Number.isFinite(city.elevation) ? clamp(city.elevation) : relief[gridY * width + gridX] ?? 0,
-      population: Number.isFinite(city.population) ? Math.max(0, Math.round(city.population)) : 0,
-    }];
+    return [
+      {
+        id: typeof city.id === "string" && city.id ? city.id.slice(0, 128) : `city-${index}`,
+        name:
+          typeof city.name === "string" && city.name.trim()
+            ? city.name.trim().slice(0, 120)
+            : `City ${index + 1}`,
+        kind: locationKinds.has(city.kind ?? "") ? city.kind : "settlement",
+        x,
+        y,
+        elevation: Number.isFinite(city.elevation)
+          ? clamp(city.elevation)
+          : (relief[gridY * width + gridX] ?? 0),
+        population: Number.isFinite(city.population) ? Math.max(0, Math.round(city.population)) : 0,
+      },
+    ];
   });
   const rawRoads = Array.isArray(map.roads) ? map.roads : [];
   if (rawRoads.length > 25_000) {
@@ -180,19 +219,23 @@ export function ensureExtendedMap(map: MapState): MapStateExtended {
     const points = road.points.flatMap((point) =>
       point && Number.isFinite(point.x) && Number.isFinite(point.y)
         ? [{ x: clamp(point.x, 0, 1), y: clamp(point.y, 0, 1) }]
-        : []
+        : [],
     );
     if (points.length < 2) return [];
-    return [{
-      id: typeof road.id === "string" && road.id ? road.id.slice(0, 128) : `road-${index}`,
-      from_city_id: typeof road.from_city_id === "string" && road.from_city_id.trim()
-        ? road.from_city_id.trim().slice(0, 128)
-        : `road-${index}-start`,
-      to_city_id: typeof road.to_city_id === "string" && road.to_city_id.trim()
-        ? road.to_city_id.trim().slice(0, 128)
-        : `road-${index}-end`,
-      points,
-    }];
+    return [
+      {
+        id: typeof road.id === "string" && road.id ? road.id.slice(0, 128) : `road-${index}`,
+        from_city_id:
+          typeof road.from_city_id === "string" && road.from_city_id.trim()
+            ? road.from_city_id.trim().slice(0, 128)
+            : `road-${index}-start`,
+        to_city_id:
+          typeof road.to_city_id === "string" && road.to_city_id.trim()
+            ? road.to_city_id.trim().slice(0, 128)
+            : `road-${index}-end`,
+        points,
+      },
+    ];
   });
   return {
     ...map,

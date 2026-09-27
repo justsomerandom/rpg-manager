@@ -58,12 +58,36 @@ export const CITY_TYPE_OPTIONS: ReadonlyArray<{
   label: string;
   description: string;
 }> = [
-  { key: "capital", label: "Capital", description: "Ceremonial avenues, civic quarters, and dense mixed wards." },
-  { key: "trade", label: "Trade hub", description: "Market-heavy districts gathered around connected thoroughfares." },
-  { key: "port", label: "Port city", description: "A harbor quarter backed by commerce, workshops, and housing." },
-  { key: "fortress", label: "Fortress", description: "Defensible rings, controlled approaches, and a civic core." },
-  { key: "industrial", label: "Industrial", description: "Production districts with direct arterial and freight access." },
-  { key: "rural", label: "Rural settlement", description: "A loose, low-rise settlement with green and residential land." },
+  {
+    key: "capital",
+    label: "Capital",
+    description: "Ceremonial avenues, civic quarters, and dense mixed wards.",
+  },
+  {
+    key: "trade",
+    label: "Trade hub",
+    description: "Market-heavy districts gathered around connected thoroughfares.",
+  },
+  {
+    key: "port",
+    label: "Port city",
+    description: "A harbor quarter backed by commerce, workshops, and housing.",
+  },
+  {
+    key: "fortress",
+    label: "Fortress",
+    description: "Defensible rings, controlled approaches, and a civic core.",
+  },
+  {
+    key: "industrial",
+    label: "Industrial",
+    description: "Production districts with direct arterial and freight access.",
+  },
+  {
+    key: "rural",
+    label: "Rural settlement",
+    description: "A loose, low-rise settlement with green and residential land.",
+  },
 ];
 
 export const CITY_LAYOUT_OPTIONS: ReadonlyArray<{
@@ -71,10 +95,22 @@ export const CITY_LAYOUT_OPTIONS: ReadonlyArray<{
   label: string;
   description: string;
 }> = [
-  { key: "organic", label: "Organic", description: "Curving roads and irregular connectors grown over time." },
+  {
+    key: "organic",
+    label: "Organic",
+    description: "Curving roads and irregular connectors grown over time.",
+  },
   { key: "grid", label: "Grid", description: "Legible blocks with a clear street hierarchy." },
-  { key: "radial", label: "Radial", description: "Spokes and orbital streets focused on the civic centre." },
-  { key: "ring", label: "Ring", description: "Concentric routes linked by controlled cross-city roads." },
+  {
+    key: "radial",
+    label: "Radial",
+    description: "Spokes and orbital streets focused on the civic centre.",
+  },
+  {
+    key: "ring",
+    label: "Ring",
+    description: "Concentric routes linked by controlled cross-city roads.",
+  },
 ];
 
 const BUILDING_TARGETS: Record<CitySize, number> = {
@@ -90,10 +126,30 @@ export const CITY_SIZE_OPTIONS: ReadonlyArray<{
   description: string;
   targetBuildings: number;
 }> = [
-  { key: "village", label: "Village", description: "A compact settlement with a few local streets.", targetBuildings: BUILDING_TARGETS.village },
-  { key: "town", label: "Town", description: "Several connected quarters and a developed centre.", targetBuildings: BUILDING_TARGETS.town },
-  { key: "city", label: "City", description: "A full district network with layered street hierarchy.", targetBuildings: BUILDING_TARGETS.city },
-  { key: "megapolis", label: "Metropolis", description: "A dense regional centre built for high-level campaigns.", targetBuildings: BUILDING_TARGETS.megapolis },
+  {
+    key: "village",
+    label: "Village",
+    description: "A compact settlement with a few local streets.",
+    targetBuildings: BUILDING_TARGETS.village,
+  },
+  {
+    key: "town",
+    label: "Town",
+    description: "Several connected quarters and a developed centre.",
+    targetBuildings: BUILDING_TARGETS.town,
+  },
+  {
+    key: "city",
+    label: "City",
+    description: "A full district network with layered street hierarchy.",
+    targetBuildings: BUILDING_TARGETS.city,
+  },
+  {
+    key: "megapolis",
+    label: "Metropolis",
+    description: "A dense regional centre built for high-level campaigns.",
+    targetBuildings: BUILDING_TARGETS.megapolis,
+  },
 ];
 
 export function deriveRecommendedCitySize(population: number): CitySize {
@@ -164,9 +220,36 @@ const ROAD_CORRIDORS: Record<RoadImportance, number> = {
 };
 
 const ROAD_NAMES: Record<RoadImportance, readonly string[]> = {
-  main: ["Grand Avenue", "King's Road", "High Street", "Crown Way", "Gate Road", "Founders' Avenue", "Meridian Way", "Long Road"],
-  secondary: ["Market Street", "Mill Street", "Garden Way", "Temple Street", "Bridge Lane", "Guild Street", "Station Road", "Lantern Street"],
-  alley: ["Copper Lane", "Willow Lane", "Mason's Row", "Baker's Row", "Ash Walk", "Orchard Lane", "Wren Close", "Old Passage"],
+  main: [
+    "Grand Avenue",
+    "King's Road",
+    "High Street",
+    "Crown Way",
+    "Gate Road",
+    "Founders' Avenue",
+    "Meridian Way",
+    "Long Road",
+  ],
+  secondary: [
+    "Market Street",
+    "Mill Street",
+    "Garden Way",
+    "Temple Street",
+    "Bridge Lane",
+    "Guild Street",
+    "Station Road",
+    "Lantern Street",
+  ],
+  alley: [
+    "Copper Lane",
+    "Willow Lane",
+    "Mason's Row",
+    "Baker's Row",
+    "Ash Walk",
+    "Orchard Lane",
+    "Wren Close",
+    "Old Passage",
+  ],
 };
 
 const DISTRICT_COLORS: Record<DistrictKind, string> = {
@@ -280,23 +363,26 @@ function makeRoadNetwork(
       const ratio = lineCount === 1 ? 0 : (index / (lineCount - 1)) * 2 - 1;
       const offsetX = ratio * boundary.radiusX * 0.78;
       const offsetY = ratio * boundary.radiusY * 0.78;
-      const verticalSpan = boundary.radiusY * Math.sqrt(Math.max(0.05, 1 - (offsetX / boundary.radiusX) ** 2)) * 0.94;
-      const horizontalSpan = boundary.radiusX * Math.sqrt(Math.max(0.05, 1 - (offsetY / boundary.radiusY) ** 2)) * 0.94;
+      const verticalSpan =
+        boundary.radiusY * Math.sqrt(Math.max(0.05, 1 - (offsetX / boundary.radiusX) ** 2)) * 0.94;
+      const horizontalSpan =
+        boundary.radiusX * Math.sqrt(Math.max(0.05, 1 - (offsetY / boundary.radiusY) ** 2)) * 0.94;
       const distanceFromCentre = Math.abs(ratio);
-      const importance: RoadImportance = distanceFromCentre < 0.12
-        ? "main"
-        : index % 3 === 1
-          ? "secondary"
-          : "alley";
+      const importance: RoadImportance =
+        distanceFromCentre < 0.12 ? "main" : index % 3 === 1 ? "secondary" : "alley";
       addRoad(importance, [transform(offsetX, -verticalSpan), transform(offsetX, verticalSpan)]);
-      addRoad(importance, [transform(-horizontalSpan, offsetY), transform(horizontalSpan, offsetY)]);
+      addRoad(importance, [
+        transform(-horizontalSpan, offsetY),
+        transform(horizontalSpan, offsetY),
+      ]);
     }
   } else if (layout === "radial") {
     const spokeCount = [6, 8, 11, 14][level]!;
     const startAngle = rng.range(-Math.PI, Math.PI);
     for (let index = 0; index < spokeCount; index += 1) {
       const angle = startAngle + (index / spokeCount) * TAU;
-      const importance: RoadImportance = index % Math.max(2, Math.floor(spokeCount / 4)) === 0 ? "main" : "secondary";
+      const importance: RoadImportance =
+        index % Math.max(2, Math.floor(spokeCount / 4)) === 0 ? "main" : "secondary";
       const middle = pointOnEllipse(boundary, angle + rng.range(-0.035, 0.035), 0.5);
       addRoad(importance, [center, middle, pointOnEllipse(boundary, angle, 0.94)]);
     }
@@ -319,7 +405,8 @@ function makeRoadNetwork(
       const points = Array.from({ length: samples + 1 }, (_, index) =>
         pointOnEllipse(boundary, startAngle + (index / samples) * TAU, scale),
       );
-      const importance: RoadImportance = ring === 1 || ring === ringCount ? "main" : ring % 2 === 0 ? "secondary" : "alley";
+      const importance: RoadImportance =
+        ring === 1 || ring === ringCount ? "main" : ring % 2 === 0 ? "secondary" : "alley";
       addRoad(importance, points);
     }
     for (let index = 0; index < spokeCount; index += 1) {
@@ -340,7 +427,10 @@ function makeRoadNetwork(
       arterialAngles.push(angle);
       const controlA = pointOnEllipse(boundary, angle + rng.range(-0.18, 0.18), 0.28);
       const controlB = pointOnEllipse(boundary, angle + rng.range(-0.12, 0.12), 0.62);
-      const smoothed = chaikinSmooth([center, controlA, controlB, pointOnEllipse(boundary, angle, 0.94)], 2);
+      const smoothed = chaikinSmooth(
+        [center, controlA, controlB, pointOnEllipse(boundary, angle, 0.94)],
+        2,
+      );
       arterialPaths.push(smoothed);
       addRoad(index % 3 === 0 ? "main" : "secondary", smoothed);
     }
@@ -353,10 +443,21 @@ function makeRoadNetwork(
         const startPath = arterialPaths[index]!;
         const endPath = arterialPaths[(index + 1) % arterialPaths.length]!;
         const start = startPath[Math.round(clamp(scale / 0.94) * (startPath.length - 1))]!;
-        const end = endPath[Math.round(clamp((scale + rng.range(-0.025, 0.025)) / 0.94) * (endPath.length - 1))]!;
-        const middleAngle = angle + Math.atan2(Math.sin(nextAngle - angle), Math.cos(nextAngle - angle)) / 2;
-        const control = pointOnEllipse(boundary, middleAngle + rng.range(-0.08, 0.08), scale + rng.range(-0.035, 0.04));
-        addRoad(layer === branchLayers - 1 ? "secondary" : "alley", chaikinSmooth([start, control, end], 2));
+        const end =
+          endPath[
+            Math.round(clamp((scale + rng.range(-0.025, 0.025)) / 0.94) * (endPath.length - 1))
+          ]!;
+        const middleAngle =
+          angle + Math.atan2(Math.sin(nextAngle - angle), Math.cos(nextAngle - angle)) / 2;
+        const control = pointOnEllipse(
+          boundary,
+          middleAngle + rng.range(-0.08, 0.08),
+          scale + rng.range(-0.035, 0.04),
+        );
+        addRoad(
+          layer === branchLayers - 1 ? "secondary" : "alley",
+          chaikinSmooth([start, control, end], 2),
+        );
       }
     }
   }
@@ -374,12 +475,54 @@ function makeRoadNetwork(
 type WeightedKind = readonly [DistrictKind, number];
 
 const DISTRICT_WEIGHTS: Record<CityType, readonly WeightedKind[]> = {
-  capital: [["civic", 3], ["commercial", 2], ["residential", 4], ["mixed", 3], ["green", 1], ["industrial", 1]],
-  trade: [["commercial", 4], ["residential", 3], ["mixed", 3], ["industrial", 2], ["civic", 1], ["green", 1]],
-  port: [["harbor", 3], ["commercial", 3], ["industrial", 2], ["residential", 3], ["mixed", 2], ["civic", 1]],
-  fortress: [["civic", 3], ["residential", 3], ["industrial", 2], ["mixed", 2], ["green", 1], ["commercial", 1]],
-  industrial: [["industrial", 5], ["residential", 3], ["commercial", 2], ["mixed", 2], ["civic", 1], ["green", 1]],
-  rural: [["residential", 4], ["green", 4], ["mixed", 3], ["commercial", 1], ["civic", 1], ["industrial", 1]],
+  capital: [
+    ["civic", 3],
+    ["commercial", 2],
+    ["residential", 4],
+    ["mixed", 3],
+    ["green", 1],
+    ["industrial", 1],
+  ],
+  trade: [
+    ["commercial", 4],
+    ["residential", 3],
+    ["mixed", 3],
+    ["industrial", 2],
+    ["civic", 1],
+    ["green", 1],
+  ],
+  port: [
+    ["harbor", 3],
+    ["commercial", 3],
+    ["industrial", 2],
+    ["residential", 3],
+    ["mixed", 2],
+    ["civic", 1],
+  ],
+  fortress: [
+    ["civic", 3],
+    ["residential", 3],
+    ["industrial", 2],
+    ["mixed", 2],
+    ["green", 1],
+    ["commercial", 1],
+  ],
+  industrial: [
+    ["industrial", 5],
+    ["residential", 3],
+    ["commercial", 2],
+    ["mixed", 2],
+    ["civic", 1],
+    ["green", 1],
+  ],
+  rural: [
+    ["residential", 4],
+    ["green", 4],
+    ["mixed", 3],
+    ["commercial", 1],
+    ["civic", 1],
+    ["industrial", 1],
+  ],
 };
 
 function weightedDistrictKind(rng: SeededRandom, cityType: CityType): DistrictKind {
@@ -423,13 +566,14 @@ function makeDistricts(
   const rng = new SeededRandom(hashParts(seed, cityId, "districts", cityType));
   const totalCount = [4, 7, 10, 14][SIZE_ORDER[size]]!;
   const centralScale = cityType === "rural" ? 0.19 : cityType === "capital" ? 0.27 : 0.23;
-  const centralKind: DistrictKind = cityType === "industrial"
-    ? "industrial"
-    : cityType === "trade" || cityType === "port"
-      ? "commercial"
-      : cityType === "rural"
-        ? "mixed"
-        : "civic";
+  const centralKind: DistrictKind =
+    cityType === "industrial"
+      ? "industrial"
+      : cityType === "trade" || cityType === "port"
+        ? "commercial"
+        : cityType === "rural"
+          ? "mixed"
+          : "civic";
   const districts: GeneratedDistrict[] = [];
   const kindCounts = new Map<DistrictKind, number>();
   const addDistrict = (kind: DistrictKind, points: Point[]) => {
@@ -467,12 +611,18 @@ function makeDistricts(
     const startAngle = originAngle + (index / outerCount) * TAU + 0.009;
     const endAngle = originAngle + ((index + 1) / outerCount) * TAU - 0.009;
     const middleAngle = (startAngle + endAngle) / 2;
-    const harborDifference = Math.abs(Math.atan2(Math.sin(middleAngle - harborAngle), Math.cos(middleAngle - harborAngle)));
-    const kind = !harborAssigned && harborDifference <= Math.PI / Math.max(3, outerCount)
-      ? "harbor"
-      : weightedDistrictKind(rng, cityType);
+    const harborDifference = Math.abs(
+      Math.atan2(Math.sin(middleAngle - harborAngle), Math.cos(middleAngle - harborAngle)),
+    );
+    const kind =
+      !harborAssigned && harborDifference <= Math.PI / Math.max(3, outerCount)
+        ? "harbor"
+        : weightedDistrictKind(rng, cityType);
     if (kind === "harbor") harborAssigned = true;
-    addDistrict(kind, createDistrictPolygon(boundary, startAngle, endAngle, centralScale * 1.08, 0.93));
+    addDistrict(
+      kind,
+      createDistrictPolygon(boundary, startAngle, endAngle, centralScale * 1.08, 0.93),
+    );
   }
   if (cityType === "port" && !harborAssigned && districts.length > 1) {
     const replacement = districts[1]!;
@@ -522,7 +672,13 @@ function indexRoadSegments(roads: readonly RoadDraft[]): {
       const b = road.points[index]!;
       const segmentLength = distance(a, b);
       if (segmentLength < 0.002) continue;
-      const segment: IndexedRoadSegment = { a, b, corridor, importance: road.importance, length: segmentLength };
+      const segment: IndexedRoadSegment = {
+        a,
+        b,
+        corridor,
+        importance: road.importance,
+        length: segmentLength,
+      };
       segments.push(segment);
       spatialIndex.insert(segment, segmentBounds(a, b, corridor + 0.004));
     }
@@ -552,17 +708,23 @@ function clearsRoads(
   roadIndex: SpatialHash<IndexedRoadSegment>,
   extraClearance = 0.0018,
 ): boolean {
-  return roadIndex.query(rectangleBounds(rectangle, 0.012)).every((segment) =>
-    distanceSegmentToRectangle(segment.a, segment.b, rectangle) > segment.corridor + extraClearance,
-  );
+  return roadIndex
+    .query(rectangleBounds(rectangle, 0.012))
+    .every(
+      (segment) =>
+        distanceSegmentToRectangle(segment.a, segment.b, rectangle) >
+        segment.corridor + extraClearance,
+    );
 }
 
 function findDistrict(point: Point, districts: readonly GeneratedDistrict[]): GeneratedDistrict {
   const containing = districts.find((district) => polygonContainsPoint(point, district.points));
   if (containing) return containing;
-  return districts.reduce((nearest, district) =>
-    distance(point, district) < distance(point, nearest) ? district : nearest,
-  districts[0]!);
+  return districts.reduce(
+    (nearest, district) =>
+      distance(point, district) < distance(point, nearest) ? district : nearest,
+    districts[0]!,
+  );
 }
 
 const BUILDING_WEIGHTS: Record<DistrictKind, Record<BuildingKind, number>> = {
@@ -584,10 +746,16 @@ const TYPE_BUILDING_MODIFIERS: Record<CityType, Partial<Record<BuildingKind, num
   rural: { residential: 1.4, civic: 1.15, industrial: 0.7 },
 };
 
-function chooseBuildingKind(rng: SeededRandom, districtKind: DistrictKind, cityType: CityType): BuildingKind {
+function chooseBuildingKind(
+  rng: SeededRandom,
+  districtKind: DistrictKind,
+  cityType: CityType,
+): BuildingKind {
   const base = BUILDING_WEIGHTS[districtKind];
   const modifiers = TYPE_BUILDING_MODIFIERS[cityType];
-  const entries = (Object.keys(base) as BuildingKind[]).map((kind) => [kind, base[kind] * (modifiers[kind] ?? 1)] as const);
+  const entries = (Object.keys(base) as BuildingKind[]).map(
+    (kind) => [kind, base[kind] * (modifiers[kind] ?? 1)] as const,
+  );
   const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
   let cursor = rng.range(0, total);
   for (const [kind, weight] of entries) {
@@ -675,9 +843,16 @@ function safeLockedBuildings(
     if (!building.locked && building.source !== "manual") continue;
     if (seenIds.has(building.id)) continue;
     const rectangle = rectangleForBuilding(building);
-    if (!rectangle || !rectangleInsideEllipse(rectangle, boundary, 0.006) || !clearsRoads(rectangle, roadIndex)) continue;
+    if (
+      !rectangle ||
+      !rectangleInsideEllipse(rectangle, boundary, 0.006) ||
+      !clearsRoads(rectangle, roadIndex)
+    )
+      continue;
     const bounds = rectangleBounds(rectangle, 0.0028);
-    const overlaps = buildingIndex.query(bounds).some((other) => rectanglesOverlap(rectangle, other.rectangle, 0.0014));
+    const overlaps = buildingIndex
+      .query(bounds)
+      .some((other) => rectanglesOverlap(rectangle, other.rectangle, 0.0014));
     if (overlaps) continue;
     const indexed = { rectangle };
     buildingIndex.insert(indexed, rectangleBounds(rectangle));
@@ -703,7 +878,9 @@ function makeBuildings(
   districts: readonly GeneratedDistrict[],
   lockedBuildings: readonly CityBuilding[],
 ): CityBuilding[] {
-  const rng = new SeededRandom(hashParts(seed, cityId, "buildings", size, cityType, density, scale));
+  const rng = new SeededRandom(
+    hashParts(seed, cityId, "buildings", size, cityType, density, scale),
+  );
   const { segments, spatialIndex: roadIndex } = indexRoadSegments(roads);
   if (segments.length === 0) return [];
   const buildingIndex = new SpatialHash<IndexedBuilding>(0.027);
@@ -756,9 +933,9 @@ function makeBuildings(
     if (!polygonContainsPoint({ x: rectangle.x, y: rectangle.y }, district.points)) continue;
     if (!clearsRoads(rectangle, roadIndex)) continue;
     const paddedBounds = rectangleBounds(rectangle, 0.0027);
-    const overlaps = buildingIndex.query(paddedBounds).some((other) =>
-      rectanglesOverlap(rectangle, other.rectangle, 0.00135),
-    );
+    const overlaps = buildingIndex
+      .query(paddedBounds)
+      .some((other) => rectanglesOverlap(rectangle, other.rectangle, 0.00135));
     if (overlaps) continue;
 
     const generatedIndex = buildings.length - preserved.length;
@@ -796,7 +973,12 @@ function normalizedEntrances(entrances: readonly number[]): number[] {
   for (const value of entrances.slice(0, 32)) {
     if (!Number.isFinite(value)) continue;
     const angle = Math.atan2(Math.sin(value), Math.cos(value));
-    if (normalized.every((existing) => Math.abs(Math.atan2(Math.sin(existing - angle), Math.cos(existing - angle))) > 0.035)) {
+    if (
+      normalized.every(
+        (existing) =>
+          Math.abs(Math.atan2(Math.sin(existing - angle), Math.cos(existing - angle))) > 0.035,
+      )
+    ) {
       normalized.push(angle);
     }
   }
@@ -823,7 +1005,14 @@ export function generateCityPlan(
     boundary,
     connections,
   );
-  const districts = makeDistricts(city.id, config.size, config.cityType, seed, boundary, connections);
+  const districts = makeDistricts(
+    city.id,
+    config.size,
+    config.cityType,
+    seed,
+    boundary,
+    connections,
+  );
   const buildings = makeBuildings(
     city.id,
     config.size,

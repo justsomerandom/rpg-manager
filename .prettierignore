@@ -1,0 +1,5 @@
+dist/
+src-tauri/gen/
+src-tauri/target/
+package-lock.json
+src-tauri/Cargo.lock

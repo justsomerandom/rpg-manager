@@ -69,8 +69,12 @@ export function hashParts(...parts: Array<string | number>): number {
 }
 
 export function stableId(prefix: string, seed: number, ...parts: Array<string | number>): string {
-  const primary = hashParts(prefix, seed, ...parts).toString(36).padStart(7, "0");
-  const secondary = hashParts(seed ^ 0x9e3779b9, ...parts, prefix).toString(36).padStart(7, "0");
+  const primary = hashParts(prefix, seed, ...parts)
+    .toString(36)
+    .padStart(7, "0");
+  const secondary = hashParts(seed ^ 0x9e3779b9, ...parts, prefix)
+    .toString(36)
+    .padStart(7, "0");
   return `${prefix}-${primary}${secondary}`;
 }
 
@@ -187,7 +191,10 @@ export function segmentsIntersect(a: Point, b: Point, c: Point, d: Point): boole
   const abD = orientation(a, b, d);
   const cdA = orientation(c, d, a);
   const cdB = orientation(c, d, b);
-  if (((abC > 0 && abD < 0) || (abC < 0 && abD > 0)) && ((cdA > 0 && cdB < 0) || (cdA < 0 && cdB > 0))) {
+  if (
+    ((abC > 0 && abD < 0) || (abC < 0 && abD > 0)) &&
+    ((cdA > 0 && cdB < 0) || (cdA < 0 && cdB > 0))
+  ) {
     return true;
   }
   return (
@@ -250,9 +257,21 @@ function projectPolygon(points: readonly Point[], axis: Point): { min: number; m
   return { min, max };
 }
 
-export function rectanglesOverlap(a: OrientedRectangle, b: OrientedRectangle, padding = 0): boolean {
-  const first: OrientedRectangle = { ...a, width: a.width + padding * 2, height: a.height + padding * 2 };
-  const second: OrientedRectangle = { ...b, width: b.width + padding * 2, height: b.height + padding * 2 };
+export function rectanglesOverlap(
+  a: OrientedRectangle,
+  b: OrientedRectangle,
+  padding = 0,
+): boolean {
+  const first: OrientedRectangle = {
+    ...a,
+    width: a.width + padding * 2,
+    height: a.height + padding * 2,
+  };
+  const second: OrientedRectangle = {
+    ...b,
+    width: b.width + padding * 2,
+    height: b.height + padding * 2,
+  };
   const firstCorners = rectangleCorners(first);
   const secondCorners = rectangleCorners(second);
   const axes = [
@@ -264,7 +283,9 @@ export function rectanglesOverlap(a: OrientedRectangle, b: OrientedRectangle, pa
   return axes.every((axis) => {
     const firstProjection = projectPolygon(firstCorners, axis);
     const secondProjection = projectPolygon(secondCorners, axis);
-    return firstProjection.max >= secondProjection.min && secondProjection.max >= firstProjection.min;
+    return (
+      firstProjection.max >= secondProjection.min && secondProjection.max >= firstProjection.min
+    );
   });
 }
 
@@ -276,12 +297,17 @@ function toRectangleLocal(point: Point, rectangle: OrientedRectangle): Point {
   return { x: dx * cosine - dy * sine, y: dx * sine + dy * cosine };
 }
 
-export function distanceSegmentToRectangle(a: Point, b: Point, rectangle: OrientedRectangle): number {
+export function distanceSegmentToRectangle(
+  a: Point,
+  b: Point,
+  rectangle: OrientedRectangle,
+): number {
   const localA = toRectangleLocal(a, rectangle);
   const localB = toRectangleLocal(b, rectangle);
   const halfWidth = rectangle.width / 2;
   const halfHeight = rectangle.height / 2;
-  const inside = (point: Point) => Math.abs(point.x) <= halfWidth && Math.abs(point.y) <= halfHeight;
+  const inside = (point: Point) =>
+    Math.abs(point.x) <= halfWidth && Math.abs(point.y) <= halfHeight;
   if (inside(localA) || inside(localB)) return 0;
   const corners: [Point, Point, Point, Point] = [
     { x: -halfWidth, y: -halfHeight },
@@ -293,13 +319,22 @@ export function distanceSegmentToRectangle(a: Point, b: Point, rectangle: Orient
   for (let index = 0; index < corners.length; index += 1) {
     minimum = Math.min(
       minimum,
-      distanceBetweenSegments(localA, localB, corners[index]!, corners[(index + 1) % corners.length]!),
+      distanceBetweenSegments(
+        localA,
+        localB,
+        corners[index]!,
+        corners[(index + 1) % corners.length]!,
+      ),
     );
   }
   return minimum;
 }
 
-export function rectangleInsideEllipse(rectangle: OrientedRectangle, boundary: EllipseBoundary, inset = 0): boolean {
+export function rectangleInsideEllipse(
+  rectangle: OrientedRectangle,
+  boundary: EllipseBoundary,
+  inset = 0,
+): boolean {
   const radiusX = Math.max(0.0001, boundary.radiusX - inset);
   const radiusY = Math.max(0.0001, boundary.radiusY - inset);
   return rectangleCorners(rectangle).every((point) => {
@@ -312,10 +347,14 @@ export function rectangleInsideEllipse(rectangle: OrientedRectangle, boundary: E
 export function polygonContainsPoint(point: Point, polygon: readonly Point[]): boolean {
   if (polygon.length < 3) return false;
   let inside = false;
-  for (let current = 0, previous = polygon.length - 1; current < polygon.length; previous = current, current += 1) {
+  for (
+    let current = 0, previous = polygon.length - 1;
+    current < polygon.length;
+    previous = current, current += 1
+  ) {
     const a = polygon[current]!;
     const b = polygon[previous]!;
-    const crosses = (a.y > point.y) !== (b.y > point.y);
+    const crosses = a.y > point.y !== b.y > point.y;
     if (crosses && point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
   }
   return inside;

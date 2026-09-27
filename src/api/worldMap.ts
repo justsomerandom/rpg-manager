@@ -44,10 +44,7 @@ export async function getWorldMap(worldId: string): Promise<MapState | null> {
   return await invokeOrThrow<MapState | null>("get_world_map", { worldId });
 }
 
-export async function saveWorldMap(
-  worldId: string,
-  map: MapState
-): Promise<MapState> {
+export async function saveWorldMap(worldId: string, map: MapState): Promise<MapState> {
   return await invokeOrThrow<MapState>("save_world_map", {
     worldId,
     map,

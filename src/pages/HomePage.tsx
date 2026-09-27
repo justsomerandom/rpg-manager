@@ -18,7 +18,7 @@ import { useCloseGuard, type CloseGuardRequest } from "../hooks/useCloseGuard";
 
 const loadCreateWorldDialog = () => import("../components/home/CreateWorldDialog");
 const CreateWorldDialog = lazy(() =>
-  loadCreateWorldDialog().then((module) => ({ default: module.CreateWorldDialog }))
+  loadCreateWorldDialog().then((module) => ({ default: module.CreateWorldDialog })),
 );
 
 const worldDateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -47,7 +47,13 @@ function BrandMark() {
         stroke="currentColor"
         strokeWidth="1.5"
       />
-      <path d="m24 11 5 12-5 14-5-14 5-12Z" fill="currentColor" fillOpacity=".22" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="m24 11 5 12-5 14-5-14 5-12Z"
+        fill="currentColor"
+        fillOpacity=".22"
+        stroke="currentColor"
+        strokeWidth="1.4"
+      />
       <circle cx="24" cy="24" r="3" fill="currentColor" />
     </svg>
   );
@@ -64,7 +70,13 @@ function PlusIcon() {
 function ArrowIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 20 20" className="h-4 w-4" fill="none">
-      <path d="M4 10h12m-4-4 4 4-4 4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M4 10h12m-4-4 4 4-4 4"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -72,7 +84,13 @@ function ArrowIcon() {
 function TrashIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 20 20" className="h-4 w-4" fill="none">
-      <path d="M4 6h12M8 6V4h4v2M6.5 6l.7 10h5.6l.7-10M8.5 9v4m3-4v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M4 6h12M8 6V4h4v2M6.5 6l.7 10h5.6l.7-10M8.5 9v4m3-4v4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -80,7 +98,11 @@ function TrashIcon() {
 function StorageIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 20 20" className="h-4 w-4" fill="none">
-      <path d="M4 6c0-1.1 2.7-2 6-2s6 .9 6 2-2.7 2-6 2-6-.9-6-2Zm0 0v4c0 1.1 2.7 2 6 2s6-.9 6-2V6m-12 4v4c0 1.1 2.7 2 6 2s6-.9 6-2v-4" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M4 6c0-1.1 2.7-2 6-2s6 .9 6 2-2.7 2-6 2-6-.9-6-2Zm0 0v4c0 1.1 2.7 2 6 2s6-.9 6-2V6m-12 4v4c0 1.1 2.7 2 6 2s6-.9 6-2v-4"
+        stroke="currentColor"
+        strokeWidth="1.4"
+      />
     </svg>
   );
 }
@@ -89,8 +111,20 @@ function WorldGlyph() {
   return (
     <svg aria-hidden="true" viewBox="0 0 64 64" className="h-16 w-16" fill="none">
       <circle cx="32" cy="32" r="23" stroke="currentColor" strokeWidth="1.5" opacity=".7" />
-      <path d="M12 35c7-6 11-3 16-8 6-6 11-2 23-7M17 47c7-8 13-6 19-12 5-5 9-3 16-7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity=".55" />
-      <path d="m32 17 4.5 11L32 46l-4.5-18L32 17Z" fill="currentColor" fillOpacity=".16" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M12 35c7-6 11-3 16-8 6-6 11-2 23-7M17 47c7-8 13-6 19-12 5-5 9-3 16-7"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        opacity=".55"
+      />
+      <path
+        d="m32 17 4.5 11L32 46l-4.5-18L32 17Z"
+        fill="currentColor"
+        fillOpacity=".16"
+        stroke="currentColor"
+        strokeWidth="1.4"
+      />
       <circle cx="32" cy="32" r="2.5" fill="currentColor" />
     </svg>
   );
@@ -132,10 +166,18 @@ function NavigationGuardDialog({
         <div className="p-6 sm:p-7">
           <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-xl border border-amber-400/30 bg-amber-400/10 text-amber-200">
             <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none">
-              <path d="M12 8v5m0 3.5v.1M4.7 19h14.6a1.5 1.5 0 0 0 1.3-2.25L13.3 4a1.5 1.5 0 0 0-2.6 0L3.4 16.75A1.5 1.5 0 0 0 4.7 19Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              <path
+                d="M12 8v5m0 3.5v.1M4.7 19h14.6a1.5 1.5 0 0 0 1.3-2.25L13.3 4a1.5 1.5 0 0 0-2.6 0L3.4 16.75A1.5 1.5 0 0 0 4.7 19Z"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
             </svg>
           </div>
-          <h2 id="leave-draft-title" className="font-display text-2xl font-semibold text-brand-glow">
+          <h2
+            id="leave-draft-title"
+            className="font-display text-2xl font-semibold text-brand-glow"
+          >
             {pending ? "World creation is still running" : "Leave without this draft?"}
           </h2>
           <p id="leave-draft-description" className="mt-2 text-sm leading-6 text-slate-300">
@@ -204,10 +246,18 @@ function NativeCloseGuardDialog({
         <div className="p-6 sm:p-7">
           <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-xl border border-amber-400/30 bg-amber-400/10 text-amber-200">
             <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none">
-              <path d="M12 8v5m0 3.5v.1M4.7 19h14.6a1.5 1.5 0 0 0 1.3-2.25L13.3 4a1.5 1.5 0 0 0-2.6 0L3.4 16.75A1.5 1.5 0 0 0 4.7 19Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              <path
+                d="M12 8v5m0 3.5v.1M4.7 19h14.6a1.5 1.5 0 0 0 1.3-2.25L13.3 4a1.5 1.5 0 0 0-2.6 0L3.4 16.75A1.5 1.5 0 0 0 4.7 19Z"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
             </svg>
           </div>
-          <h2 id="native-close-title" className="font-display text-2xl font-semibold text-brand-glow">
+          <h2
+            id="native-close-title"
+            className="font-display text-2xl font-semibold text-brand-glow"
+          >
             {title}
           </h2>
           <p id="native-close-description" className="mt-2 text-sm leading-6 text-slate-300">
@@ -310,9 +360,7 @@ export function HomePage() {
     if (target instanceof HTMLElement) {
       target.focus();
       target.scrollIntoView({
-        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-          ? "auto"
-          : "smooth",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
         block: "nearest",
       });
     } else {
@@ -411,7 +459,9 @@ export function HomePage() {
               <p className="truncate font-display text-lg font-semibold tracking-tight text-brand-glow">
                 RPG Manager
               </p>
-              <p className="hidden text-xs text-slate-400 sm:block">Campaigns, lore, and maps in one place</p>
+              <p className="hidden text-xs text-slate-400 sm:block">
+                Campaigns, lore, and maps in one place
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
@@ -422,7 +472,11 @@ export function HomePage() {
               <StorageIcon />
               Stored locally
             </div>
-            <button type="button" className="primary-button min-h-11 gap-2" onClick={openCreateDialog}>
+            <button
+              type="button"
+              className="primary-button min-h-11 gap-2"
+              onClick={openCreateDialog}
+            >
               <PlusIcon />
               <span>New world</span>
             </button>
@@ -441,7 +495,8 @@ export function HomePage() {
               Choose your world
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300 sm:text-lg">
-              Return to an existing campaign, or begin a new setting with a structure that is ready when you are.
+              Return to an existing campaign, or begin a new setting with a structure that is ready
+              when you are.
             </p>
           </div>
           <div className="world-count-pill" aria-label={worldCountLabel}>
@@ -471,9 +526,16 @@ export function HomePage() {
         )}
 
         {loadError && worlds.length > 0 && (
-          <div className="status-warning flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between" role="alert">
+          <div
+            className="status-warning flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+            role="alert"
+          >
             <span>{loadError} Your current library remains available.</span>
-            <button type="button" className="secondary-button min-h-11 shrink-0" onClick={() => setReloadKey((key) => key + 1)}>
+            <button
+              type="button"
+              className="secondary-button min-h-11 shrink-0"
+              onClick={() => setReloadKey((key) => key + 1)}
+            >
               Retry loading
             </button>
           </div>
@@ -500,9 +562,15 @@ export function HomePage() {
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-red-400/25 bg-red-950/25 text-red-200">
                 <WorldGlyph />
               </div>
-              <h2 className="mt-5 font-display text-2xl font-semibold text-brand-glow">Your library could not be loaded</h2>
+              <h2 className="mt-5 font-display text-2xl font-semibold text-brand-glow">
+                Your library could not be loaded
+              </h2>
               <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-300">{loadError}</p>
-              <button type="button" className="primary-button mt-6 min-h-11" onClick={() => setReloadKey((key) => key + 1)}>
+              <button
+                type="button"
+                className="primary-button mt-6 min-h-11"
+                onClick={() => setReloadKey((key) => key + 1)}
+              >
                 Try again
               </button>
             </div>
@@ -515,11 +583,18 @@ export function HomePage() {
                 <img src={forestIcon} alt="" className="h-14 w-14 -translate-y-1 opacity-90" />
                 <img src={cityIcon} alt="" className="h-12 w-12 opacity-80" />
               </div>
-              <h2 className="mt-5 font-display text-2xl font-semibold text-brand-glow">Your first world is waiting</h2>
+              <h2 className="mt-5 font-display text-2xl font-semibold text-brand-glow">
+                Your first world is waiting
+              </h2>
               <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-300">
-                Build a campaign home for characters, lore, maps, and the details that make a setting feel alive.
+                Build a campaign home for characters, lore, maps, and the details that make a
+                setting feel alive.
               </p>
-              <button type="button" className="primary-button mt-6 min-h-11 gap-2" onClick={openCreateDialog}>
+              <button
+                type="button"
+                className="primary-button mt-6 min-h-11 gap-2"
+                onClick={openCreateDialog}
+              >
                 <PlusIcon />
                 Create your first world
               </button>
@@ -551,19 +626,33 @@ export function HomePage() {
                             {world.name}
                           </h2>
                           <p className="mt-2 line-clamp-2 min-h-10 text-sm leading-5 text-slate-400">
-                            {world.description.trim() || "No description yet — open the world to begin shaping its story."}
+                            {world.description.trim() ||
+                              "No description yet — open the world to begin shaping its story."}
                           </p>
                         </div>
                         <div className="mt-4 flex items-center gap-2 text-xs text-slate-400">
-                          <svg aria-hidden="true" viewBox="0 0 20 20" className="h-4 w-4" fill="none">
-                            <path d="M5 3v3m10-3v3M3.5 8h13M5 5h10a2 2 0 0 1 2 2v9H3V7a2 2 0 0 1 2-2Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                          <svg
+                            aria-hidden="true"
+                            viewBox="0 0 20 20"
+                            className="h-4 w-4"
+                            fill="none"
+                          >
+                            <path
+                              d="M5 3v3m10-3v3M3.5 8h13M5 5h10a2 2 0 0 1 2 2v9H3V7a2 2 0 0 1 2-2Z"
+                              stroke="currentColor"
+                              strokeWidth="1.4"
+                              strokeLinecap="round"
+                            />
                           </svg>
                           <span>Created </span>
                           <time dateTime={dateTime}>{formatCreatedDate(world.created_at)}</time>
                         </div>
 
                         {deleteError && (
-                          <p className="mt-4 rounded-xl border border-red-400/35 bg-red-950/30 px-3 py-2 text-sm leading-5 text-red-100" role="alert">
+                          <p
+                            className="mt-4 rounded-xl border border-red-400/35 bg-red-950/30 px-3 py-2 text-sm leading-5 text-red-100"
+                            role="alert"
+                          >
                             {deleteError}
                           </p>
                         )}
@@ -618,7 +707,7 @@ export function HomePage() {
       <DeleteWorldDialog
         world={deleteTarget}
         deleting={Boolean(deleteTarget && deletingIds.has(deleteTarget.id))}
-        error={deleteTarget ? deleteErrors[deleteTarget.id] ?? null : null}
+        error={deleteTarget ? (deleteErrors[deleteTarget.id] ?? null) : null}
         onCancel={cancelDelete}
         onConfirm={confirmDelete}
       />

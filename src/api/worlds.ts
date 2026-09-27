@@ -23,7 +23,7 @@ export async function createWorld(name: string, gameSystem: string): Promise<Wor
 export async function createWorldWithTemplates(
   name: string,
   gameSystem: string,
-  templates: TemplateDefinitionPayload[]
+  templates: TemplateDefinitionPayload[],
 ): Promise<World> {
   return await invokeOrThrow<World>("create_world_with_templates", {
     name,
@@ -42,7 +42,7 @@ export async function deleteWorld(id: string): Promise<void> {
 
 export async function updateWorld(
   id: string,
-  world: Pick<World, "name" | "game_system" | "description">
+  world: Pick<World, "name" | "game_system" | "description">,
 ): Promise<World> {
   return await invokeOrThrow<World>("update_world", {
     id,

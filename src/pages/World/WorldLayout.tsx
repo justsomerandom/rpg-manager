@@ -71,7 +71,10 @@ export function WorldLayout() {
         <div className="pointer-events-auto flex w-full justify-center px-3 pb-2 pt-2 sm:px-4">
           <div className="min-w-0 max-w-full transition-[width] duration-300 ease-out">
             <div className="rounded-2xl border border-grove-600/80 bg-grove-900/95 px-2 py-2 shadow-panel backdrop-blur-xl">
-              <nav aria-label="Campaign sections" className="flex items-center gap-1 overflow-x-auto">
+              <nav
+                aria-label="Campaign sections"
+                className="flex items-center gap-1 overflow-x-auto"
+              >
                 <Link
                   aria-label="Return to all worlds"
                   className="shrink-0 rounded-xl px-3 py-2 text-sm font-semibold text-earth-sand transition hover:bg-grove-700 hover:text-white"
@@ -82,8 +85,13 @@ export function WorldLayout() {
                   <span className="ml-2 hidden md:inline">Worlds</span>
                 </Link>
                 <div className="hidden shrink-0 border-r border-grove-600 px-3 pr-4 sm:block">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-earth-sand/70">Campaign</p>
-                  <p className="max-w-36 truncate text-sm font-semibold text-brand-glow" title={dockName}>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-earth-sand/70">
+                    Campaign
+                  </p>
+                  <p
+                    className="max-w-36 truncate text-sm font-semibold text-brand-glow"
+                    title={dockName}
+                  >
                     {dockName}
                   </p>
                 </div>
@@ -123,11 +131,15 @@ export function WorldLayout() {
             <div className="flex h-full items-center justify-center px-5 pt-20">
               <section className="glass-panel max-w-lg p-7 text-center" role="alert">
                 <p className="section-label">Campaign unavailable</p>
-                <h1 className="mt-3 font-display text-2xl font-semibold">We could not open this world</h1>
+                <h1 className="mt-3 font-display text-2xl font-semibold">
+                  We could not open this world
+                </h1>
                 <p className="mt-3 text-sm leading-6 text-slate-300">
                   {worldError || "This campaign no longer exists."}
                 </p>
-                <Link className="primary-button mt-6" to="/">Return to worlds</Link>
+                <Link className="primary-button mt-6" to="/">
+                  Return to worlds
+                </Link>
               </section>
             </div>
           ) : isMapRoute ? (

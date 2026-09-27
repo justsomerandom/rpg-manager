@@ -1,11 +1,6 @@
 import { invokeOrThrow } from "./client";
 
-export type TemplateType =
-  | "character"
-  | "npc"
-  | "item"
-  | "ability"
-  | "custom_entity";
+export type TemplateType = "character" | "npc" | "item" | "ability" | "custom_entity";
 
 export type WorldTemplate = {
   id: string;
@@ -30,7 +25,7 @@ export type TemplateDefinitionPayload = {
 
 export async function listWorldTemplates(
   worldId: string,
-  templateType?: TemplateType
+  templateType?: TemplateType,
 ): Promise<WorldTemplate[]> {
   return await invokeOrThrow<WorldTemplate[]>("list_world_templates", {
     worldId,
@@ -40,7 +35,7 @@ export async function listWorldTemplates(
 
 export async function saveWorldTemplates(
   worldId: string,
-  templates: TemplateDefinitionPayload[]
+  templates: TemplateDefinitionPayload[],
 ): Promise<WorldTemplate[]> {
   return await invokeOrThrow<WorldTemplate[]>("save_world_templates", {
     worldId,

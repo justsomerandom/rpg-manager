@@ -46,7 +46,10 @@ function SparkIcon() {
         strokeWidth="1.5"
         strokeLinejoin="round"
       />
-      <path d="m18.5 16 .7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7.7-2.3Z" fill="currentColor" />
+      <path
+        d="m18.5 16 .7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7.7-2.3Z"
+        fill="currentColor"
+      />
     </svg>
   );
 }
@@ -59,7 +62,13 @@ function ArrowIcon({ direction = "right" }: { direction?: "left" | "right" }) {
       className={`h-4 w-4 ${direction === "left" ? "rotate-180" : ""}`}
       fill="none"
     >
-      <path d="M4 10h12m-4-4 4 4-4 4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M4 10h12m-4-4 4 4-4 4"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -104,9 +113,7 @@ export function CreateWorldDialog({
   const [step, setStep] = useState<WizardStep>("details");
   const [name, setName] = useState("");
   const [gameSystem, setGameSystem] = useState("Custom");
-  const [templates, setTemplates] = useState<WorldSetupTemplates>(() =>
-    createDefaultWorldSetup()
-  );
+  const [templates, setTemplates] = useState<WorldSetupTemplates>(() => createDefaultWorldSetup());
   const [templateDirty, setTemplateDirty] = useState(false);
   const [customizing, setCustomizing] = useState(false);
   const [activeSection, setActiveSection] = useState<WorldSetupSection>("character");
@@ -114,8 +121,7 @@ export function CreateWorldDialog({
   const [requestError, setRequestError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const [resetUndoTemplates, setResetUndoTemplates] =
-    useState<WorldSetupTemplates | null>(null);
+  const [resetUndoTemplates, setResetUndoTemplates] = useState<WorldSetupTemplates | null>(null);
 
   const dirty =
     Boolean(name.trim()) || (gameSystem.trim() || "Custom") !== "Custom" || templateDirty;
@@ -139,7 +145,7 @@ export function CreateWorldDialog({
         ...section,
         count: getSectionCount(templates, section.id),
       })),
-    [templates]
+    [templates],
   );
 
   const resetDraft = () => {
@@ -194,9 +200,7 @@ export function CreateWorldDialog({
     setStep("setup");
   };
 
-  const handleTemplateChange = (
-    updater: (current: WorldSetupTemplates) => WorldSetupTemplates
-  ) => {
+  const handleTemplateChange = (updater: (current: WorldSetupTemplates) => WorldSetupTemplates) => {
     setTemplates(updater);
     setTemplateDirty(true);
     setResetUndoTemplates(null);
@@ -247,7 +251,7 @@ export function CreateWorldDialog({
       const world = await createWorldWithTemplates(
         name.trim(),
         gameSystem.trim() || "Custom",
-        buildTemplatePayload(templates)
+        buildTemplatePayload(templates),
       );
       resetDraft();
       onCreated(world);
@@ -282,14 +286,23 @@ export function CreateWorldDialog({
           <div className="p-6 sm:p-7">
             <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-xl border border-amber-400/30 bg-amber-400/10 text-amber-200">
               <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none">
-                <path d="M12 8v5m0 3.5v.1M4.7 19h14.6a1.5 1.5 0 0 0 1.3-2.25L13.3 4a1.5 1.5 0 0 0-2.6 0L3.4 16.75A1.5 1.5 0 0 0 4.7 19Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                <path
+                  d="M12 8v5m0 3.5v.1M4.7 19h14.6a1.5 1.5 0 0 0 1.3-2.25L13.3 4a1.5 1.5 0 0 0-2.6 0L3.4 16.75A1.5 1.5 0 0 0 4.7 19Z"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                />
               </svg>
             </div>
-            <h2 id="discard-world-title" className="font-display text-2xl font-semibold text-brand-glow">
+            <h2
+              id="discard-world-title"
+              className="font-display text-2xl font-semibold text-brand-glow"
+            >
               Discard this world draft?
             </h2>
             <p id="discard-world-description" className="mt-2 text-sm leading-6 text-slate-300">
-              Your world details and any template changes will be removed. No world has been created yet.
+              Your world details and any template changes will be removed. No world has been created
+              yet.
             </p>
           </div>
           <div className="flex flex-col-reverse gap-3 border-t border-grove-700 bg-grove-900/70 px-6 py-4 sm:flex-row sm:justify-end">
@@ -315,10 +328,18 @@ export function CreateWorldDialog({
                 <span aria-hidden="true" className="h-1 w-1 rounded-full bg-grove-600" />
                 <span>Step {step === "details" ? "1" : "2"} of 2</span>
               </div>
-              <h2 id="create-world-title" className="truncate font-display text-2xl font-semibold text-brand-glow sm:text-3xl">
-                {step === "details" ? "Name your next world" : `Set up ${name.trim() || "your world"}`}
+              <h2
+                id="create-world-title"
+                className="truncate font-display text-2xl font-semibold text-brand-glow sm:text-3xl"
+              >
+                {step === "details"
+                  ? "Name your next world"
+                  : `Set up ${name.trim() || "your world"}`}
               </h2>
-              <p id="create-world-description" className="mt-1 max-w-2xl text-sm leading-6 text-slate-300">
+              <p
+                id="create-world-description"
+                className="mt-1 max-w-2xl text-sm leading-6 text-slate-300"
+              >
                 {step === "details"
                   ? "Start with the essentials. You can change these details inside the world later."
                   : "Use the ready-made starter structure, or tailor it before creating the world."}
@@ -360,14 +381,24 @@ export function CreateWorldDialog({
 
             <fieldset disabled={creating} aria-busy={creating}>
               {step === "details" && (
-                <form id="world-details-form" onSubmit={handleContinue} className="mx-auto max-w-2xl space-y-6">
+                <form
+                  id="world-details-form"
+                  onSubmit={handleContinue}
+                  className="mx-auto max-w-2xl space-y-6"
+                >
                   <div className="rounded-2xl border border-grove-600/70 bg-grove-900/35 p-5 sm:p-6">
                     <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl border border-brand/30 bg-brand/10 text-emerald-200">
                       <SparkIcon />
                     </div>
                     <div>
-                      <label htmlFor="world-name" className="mb-2 block text-sm font-semibold text-brand-glow">
-                        World name <span className="text-emerald-300" aria-hidden="true">*</span>
+                      <label
+                        htmlFor="world-name"
+                        className="mb-2 block text-sm font-semibold text-brand-glow"
+                      >
+                        World name{" "}
+                        <span className="text-emerald-300" aria-hidden="true">
+                          *
+                        </span>
                       </label>
                       <input
                         ref={nameInputRef}
@@ -394,7 +425,10 @@ export function CreateWorldDialog({
                       </p>
                     </div>
                     <div className="mt-5">
-                      <label htmlFor="world-system" className="mb-2 block text-sm font-semibold text-brand-glow">
+                      <label
+                        htmlFor="world-system"
+                        className="mb-2 block text-sm font-semibold text-brand-glow"
+                      >
                         Game system
                       </label>
                       <input
@@ -428,8 +462,12 @@ export function CreateWorldDialog({
                 <div className="mx-auto max-w-3xl space-y-5">
                   <div className="flex flex-col gap-4 rounded-2xl border border-brand/25 bg-brand/10 p-5 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0">
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-200/80">World details</p>
-                      <p className="mt-1 break-words font-display text-xl font-semibold text-brand-glow">{name.trim()}</p>
+                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-200/80">
+                        World details
+                      </p>
+                      <p className="mt-1 break-words font-display text-xl font-semibold text-brand-glow">
+                        {name.trim()}
+                      </p>
                       <p className="mt-1 text-sm text-slate-300">{gameSystem.trim() || "Custom"}</p>
                     </div>
                     <button
@@ -447,9 +485,12 @@ export function CreateWorldDialog({
                   <div>
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                       <div>
-                        <h3 className="font-display text-xl font-semibold text-brand-glow">Starter setup</h3>
+                        <h3 className="font-display text-xl font-semibold text-brand-glow">
+                          Starter setup
+                        </h3>
                         <p className="mt-1 text-sm leading-6 text-slate-300">
-                          These defaults make the workspace useful immediately. Customize them now or use them as-is.
+                          These defaults make the workspace useful immediately. Customize them now
+                          or use them as-is.
                         </p>
                       </div>
                       {templateDirty && (
@@ -463,7 +504,10 @@ export function CreateWorldDialog({
                       )}
                     </div>
                     {resetUndoTemplates && (
-                      <div className="status-info mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between" role="status">
+                      <div
+                        className="status-info mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+                        role="status"
+                      >
                         <span>The starter setup was reset to its defaults.</span>
                         <button
                           type="button"
@@ -476,9 +520,14 @@ export function CreateWorldDialog({
                     )}
                     <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                       {summaryItems.map((item) => (
-                        <div key={item.id} className="rounded-xl border border-grove-600/70 bg-grove-900/45 p-4">
+                        <div
+                          key={item.id}
+                          className="rounded-xl border border-grove-600/70 bg-grove-900/45 p-4"
+                        >
                           <p className="text-2xl font-semibold text-brand-glow">{item.count}</p>
-                          <p className="mt-1 text-sm font-medium text-slate-200">{item.shortLabel}</p>
+                          <p className="mt-1 text-sm font-medium text-slate-200">
+                            {item.shortLabel}
+                          </p>
                         </div>
                       ))}
                     </div>
@@ -506,9 +555,12 @@ export function CreateWorldDialog({
                 <div>
                   <div className="mb-5 flex flex-col gap-3 border-b border-grove-700/70 pb-5 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-earth-sand/80">Advanced setup</p>
+                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-earth-sand/80">
+                        Advanced setup
+                      </p>
                       <p className="mt-1 text-sm text-slate-300">
-                        Work through one template group at a time. Your changes stay in place as you switch sections.
+                        Work through one template group at a time. Your changes stay in place as you
+                        switch sections.
                       </p>
                     </div>
                     <button

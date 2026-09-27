@@ -58,19 +58,34 @@ export function DeleteWorldDialog({
               className="mb-5 flex h-11 w-11 items-center justify-center rounded-xl border border-red-400/35 bg-red-950/45 text-red-200"
               aria-hidden="true"
             >
-              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
+              <svg
+                viewBox="0 0 24 24"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5"
+                />
               </svg>
             </div>
 
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-red-200/80">
               Permanent action
             </p>
-            <h2 id="delete-world-title" className="mt-2 font-display text-2xl font-semibold text-brand-glow">
+            <h2
+              id="delete-world-title"
+              className="mt-2 font-display text-2xl font-semibold text-brand-glow"
+            >
               Delete world?
             </h2>
             <p id="delete-world-description" className="mt-3 text-sm leading-6 text-slate-300">
-              This will permanently delete <strong className="font-semibold text-brand-glow break-words">{world.name}</strong> and all of its characters, lore, index entries, and maps. This cannot be undone.
+              This will permanently delete{" "}
+              <strong className="font-semibold text-brand-glow break-words">{world.name}</strong>{" "}
+              and all of its characters, lore, index entries, and maps. This cannot be undone.
             </p>
 
             {error && (

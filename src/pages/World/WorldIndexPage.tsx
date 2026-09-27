@@ -53,12 +53,27 @@ const TEMPLATE_DESCRIPTIONS: Record<TemplateType, string> = {
 };
 
 const CATEGORY_INFO: Record<WorldEntryCategory, { label: string; description: string }> = {
-  note: { label: "General note", description: "A flexible fact, person, event, or table reference." },
-  magic_system: { label: "Magic system", description: "Rules, sources, costs, and limits of magic." },
-  item_type: { label: "Item or relic", description: "Equipment families, materials, artifacts, and relics." },
-  character_template: { label: "Character archetype", description: "Cultures, roles, ancestries, and character concepts." },
+  note: {
+    label: "General note",
+    description: "A flexible fact, person, event, or table reference.",
+  },
+  magic_system: {
+    label: "Magic system",
+    description: "Rules, sources, costs, and limits of magic.",
+  },
+  item_type: {
+    label: "Item or relic",
+    description: "Equipment families, materials, artifacts, and relics.",
+  },
+  character_template: {
+    label: "Character archetype",
+    description: "Cultures, roles, ancestries, and character concepts.",
+  },
   faction: { label: "Faction", description: "Organizations, alliances, and political groups." },
-  region: { label: "Region or place", description: "Continents, territories, landmarks, and settlements." },
+  region: {
+    label: "Region or place",
+    description: "Continents, territories, landmarks, and settlements.",
+  },
 };
 
 const makeEmptyForm = (): EntryFormState => ({
@@ -72,7 +87,8 @@ const makeEmptyForm = (): EntryFormState => ({
 const asRecord = (value: unknown): JsonRecord | null =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
 
-const readString = (value: unknown, fallback = "") => (typeof value === "string" ? value : fallback);
+const readString = (value: unknown, fallback = "") =>
+  typeof value === "string" ? value : fallback;
 
 const normalizeTags = (raw: string | string[]) => {
   const values = Array.isArray(raw) ? raw : raw.split(",");
@@ -102,10 +118,13 @@ const parseMetadata = (raw: string): JsonRecord => {
 
 const getEntryTags = (entry: WorldEntry) => {
   const tags = parseMetadata(entry.metadata_json).tags;
-  return Array.isArray(tags) ? normalizeTags(tags.filter((tag): tag is string => typeof tag === "string")) : [];
+  return Array.isArray(tags)
+    ? normalizeTags(tags.filter((tag): tag is string => typeof tag === "string"))
+    : [];
 };
 
-const serializeMetadata = (tags: string[], extra: JsonRecord = {}) => JSON.stringify({ ...extra, tags });
+const serializeMetadata = (tags: string[], extra: JsonRecord = {}) =>
+  JSON.stringify({ ...extra, tags });
 
 const parseTemplate = (template: WorldTemplate): ParsedTemplate => {
   try {
@@ -141,9 +160,10 @@ const parseLegacyEntries = (raw: string | null): LegacyWikiEntry[] => {
                 .map((tag) => tag.slice(0, 64))
             : [],
           templateType,
-          updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
-            ? entry.updatedAt
-            : Date.now(),
+          updatedAt:
+            typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
+              ? entry.updatedAt
+              : Date.now(),
         },
       ];
     });
@@ -172,8 +192,16 @@ const renderDefinitionRows = (template: ParsedTemplate): ReactNode => {
   if (template.template_type === "npc") {
     return (
       <dl className="grid gap-1 text-xs text-slate-300">
-        <div><dt className="inline text-slate-500">Role: </dt><dd className="inline">{readString(template.definition.role, "Not specified")}</dd></div>
-        <div><dt className="inline text-slate-500">Notes: </dt><dd className="inline whitespace-pre-wrap">{readString(template.definition.notes, "None")}</dd></div>
+        <div>
+          <dt className="inline text-slate-500">Role: </dt>
+          <dd className="inline">{readString(template.definition.role, "Not specified")}</dd>
+        </div>
+        <div>
+          <dt className="inline text-slate-500">Notes: </dt>
+          <dd className="inline whitespace-pre-wrap">
+            {readString(template.definition.notes, "None")}
+          </dd>
+        </div>
       </dl>
     );
   }
@@ -189,7 +217,10 @@ const renderDefinitionRows = (template: ParsedTemplate): ReactNode => {
         const label = readString(value.label, `Field ${index + 1}`);
         const type = readString(value.type || value.inputType, "text").replace(/_/g, " ");
         return (
-          <li key={`${readString(value.id, `${template.id}-${index}`)}-${index}`} className="flex justify-between gap-3 border-b border-slate-800/70 py-1 last:border-0">
+          <li
+            key={`${readString(value.id, `${template.id}-${index}`)}-${index}`}
+            className="flex justify-between gap-3 border-b border-slate-800/70 py-1 last:border-0"
+          >
             <span>{label}</span>
             <span className="text-slate-500">{type}</span>
           </li>
@@ -239,7 +270,8 @@ export function WorldIndexPage() {
         if (!cancelled) setTemplates(data.map(parseTemplate));
       })
       .catch((error) => {
-        if (!cancelled) setTemplatesError(getErrorMessage(error, "We couldn't load template references."));
+        if (!cancelled)
+          setTemplatesError(getErrorMessage(error, "We couldn't load template references."));
       })
       .finally(() => {
         if (!cancelled) setTemplatesLoading(false);
@@ -265,7 +297,9 @@ export function WorldIndexPage() {
     listWorldEntries(worldId)
       .then((data) => {
         if (!cancelled) {
-          setEntries(data.map((entry) => ({ ...entry, category: normalizeCategory(entry.category) })));
+          setEntries(
+            data.map((entry) => ({ ...entry, category: normalizeCategory(entry.category) })),
+          );
         }
       })
       .catch((error) => {
@@ -309,7 +343,7 @@ export function WorldIndexPage() {
 
   const pendingLegacyEntries = useMemo(
     () => legacyEntries.filter((entry) => !importedLegacyIds.has(entry.id)),
-    [importedLegacyIds, legacyEntries]
+    [importedLegacyIds, legacyEntries],
   );
 
   const groupedTemplates = useMemo(() => {
@@ -331,10 +365,11 @@ export function WorldIndexPage() {
       entries.filter((entry) => {
         if (filter !== "all" && entry.category !== filter) return false;
         if (!normalizedSearch) return true;
-        const haystack = `${entry.title} ${entry.summary} ${entry.body} ${getEntryTags(entry).join(" ")}`.toLocaleLowerCase();
+        const haystack =
+          `${entry.title} ${entry.summary} ${entry.body} ${getEntryTags(entry).join(" ")}`.toLocaleLowerCase();
         return haystack.includes(normalizedSearch);
       }),
-    [entries, filter, normalizedSearch]
+    [entries, filter, normalizedSearch],
   );
 
   const filteredTemplates = useMemo(() => {
@@ -348,7 +383,9 @@ export function WorldIndexPage() {
     };
     (Object.keys(groupedTemplates) as TemplateType[]).forEach((type) => {
       result[type] = groupedTemplates[type].filter((template) =>
-        `${template.name} ${JSON.stringify(template.definition)}`.toLocaleLowerCase().includes(normalizedSearch)
+        `${template.name} ${JSON.stringify(template.definition)}`
+          .toLocaleLowerCase()
+          .includes(normalizedSearch),
       );
     });
     return result;
@@ -368,20 +405,29 @@ export function WorldIndexPage() {
   const formDirty = editingEntry
     ? Boolean(
         originalFormState &&
-          (formState.title !== originalFormState.title ||
-            formState.summary !== originalFormState.summary ||
-            formState.body !== originalFormState.body ||
-            formState.category !== originalFormState.category ||
-            normalizeTags(formState.tags).join("\u0000") !== normalizeTags(originalFormState.tags).join("\u0000"))
+        (formState.title !== originalFormState.title ||
+          formState.summary !== originalFormState.summary ||
+          formState.body !== originalFormState.body ||
+          formState.category !== originalFormState.category ||
+          normalizeTags(formState.tags).join("\u0000") !==
+            normalizeTags(originalFormState.tags).join("\u0000")),
       )
-    : Boolean(formState.title || formState.summary || formState.body || formState.tags || formState.category !== "note");
+    : Boolean(
+        formState.title ||
+        formState.summary ||
+        formState.body ||
+        formState.tags ||
+        formState.category !== "note",
+      );
 
   const navigationBlocked = formDirty || saving || importingLegacy || Boolean(deletingId);
   const blocker = useBlocker(navigationBlocked);
   useEffect(() => {
     if (blocker.state !== "blocked") return;
     if (saving || importingLegacy || deletingId) {
-      window.alert("An index operation is still in progress. Wait for it to finish before leaving this page.");
+      window.alert(
+        "An index operation is still in progress. Wait for it to finish before leaving this page.",
+      );
       blocker.reset();
       return;
     }
@@ -392,7 +438,8 @@ export function WorldIndexPage() {
   useCloseGuard({
     active: navigationBlocked,
     pending: Boolean(saving || importingLegacy || deletingId),
-    pendingMessage: "An index operation is still in progress. Wait for it to finish before leaving this page.",
+    pendingMessage:
+      "An index operation is still in progress. Wait for it to finish before leaving this page.",
     confirmMessage: "Discard the unsaved index entry and leave this page?",
   });
 
@@ -406,14 +453,8 @@ export function WorldIndexPage() {
 
   const handleSaveEntry = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (
-      !worldId ||
-      entriesLoading ||
-      entriesLoadFailed ||
-      saving ||
-      deletingId ||
-      importingLegacy
-    ) return;
+    if (!worldId || entriesLoading || entriesLoadFailed || saving || deletingId || importingLegacy)
+      return;
     const title = formState.title.trim();
     if (!title) {
       setEntriesError("Entry title is required.");
@@ -432,9 +473,11 @@ export function WorldIndexPage() {
           title,
           formState.summary.trim(),
           formState.body.trim(),
-          serializeMetadata(tags, parseMetadata(editingEntry.metadata_json))
+          serializeMetadata(tags, parseMetadata(editingEntry.metadata_json)),
         );
-        setEntries((current) => current.map((entry) => (entry.id === updated.id ? updated : entry)));
+        setEntries((current) =>
+          current.map((entry) => (entry.id === updated.id ? updated : entry)),
+        );
         setMessage(`“${updated.title}” was updated.`);
       } else {
         const created = await createWorldEntry(
@@ -443,7 +486,7 @@ export function WorldIndexPage() {
           title,
           formState.summary.trim(),
           formState.body.trim(),
-          serializeMetadata(tags)
+          serializeMetadata(tags),
         );
         setEntries((current) => [created, ...current]);
         setMessage(`“${created.title}” was added to the index.`);
@@ -469,7 +512,9 @@ export function WorldIndexPage() {
     });
     setEntriesError(null);
     setMessage(null);
-    requestAnimationFrame(() => editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    requestAnimationFrame(() =>
+      editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
   };
 
   const handleDeleteEntry = async (entry: WorldEntry) => {
@@ -479,9 +524,10 @@ export function WorldIndexPage() {
       !window.confirm(
         `Delete “${entry.title}”? This cannot be undone.${
           discardsDraft ? " Your unsaved edits to this entry will also be discarded." : ""
-        }`
+        }`,
       )
-    ) return;
+    )
+      return;
     setDeletingId(entry.id);
     setEntriesError(null);
     setMessage(null);
@@ -506,7 +552,8 @@ export function WorldIndexPage() {
       entriesLoading ||
       entriesLoadFailed ||
       pendingLegacyEntries.length === 0
-    ) return;
+    )
+      return;
     setImportingLegacy(true);
     setEntriesError(null);
     setMessage(null);
@@ -526,12 +573,14 @@ export function WorldIndexPage() {
             legacyLocalId: legacy.id,
             legacyTemplateType: legacy.templateType,
             legacyUpdatedAt: legacy.updatedAt,
-          })
+          }),
         );
         imported.push(created);
       } catch (error) {
         remaining = pendingLegacyEntries.slice(index);
-        setEntriesError(getErrorMessage(error, "The legacy-note import stopped before it finished."));
+        setEntriesError(
+          getErrorMessage(error, "The legacy-note import stopped before it finished."),
+        );
         break;
       }
     }
@@ -542,15 +591,24 @@ export function WorldIndexPage() {
       if (remaining.length === 0) localStorage.removeItem(storageKey);
       else localStorage.setItem(storageKey, JSON.stringify(remaining));
     } catch {
-      setEntriesError("Notes were imported, but the legacy browser copy could not be cleared. Imported IDs will prevent duplicates.");
+      setEntriesError(
+        "Notes were imported, but the legacy browser copy could not be cleared. Imported IDs will prevent duplicates.",
+      );
     }
     setLegacyEntries(remaining);
-    if (remaining.length === 0) setMessage(`${imported.length} legacy note${imported.length === 1 ? " was" : "s were"} imported into SQLite.`);
+    if (remaining.length === 0)
+      setMessage(
+        `${imported.length} legacy note${imported.length === 1 ? " was" : "s were"} imported into SQLite.`,
+      );
     setImportingLegacy(false);
   };
 
   if (!worldId) {
-    return <p className="status-error" role="alert">This page needs a valid world.</p>;
+    return (
+      <p className="status-error" role="alert">
+        This page needs a valid world.
+      </p>
+    );
   }
 
   return (
@@ -565,34 +623,61 @@ export function WorldIndexPage() {
         </div>
       </header>
 
-      {!entriesLoading && !entriesLoadFailed && pendingLegacyEntries.length > 0 && !legacyDismissed && (
-        <section className="section-card border-amber-500/40 space-y-3" aria-labelledby="legacy-import-heading">
-          <div>
-            <h2 id="legacy-import-heading" className="text-sm font-semibold text-amber-200">Local notes found</h2>
-            <p className="mt-1 text-xs text-slate-400">
-              {pendingLegacyEntries.length} note{pendingLegacyEntries.length === 1 ? " is" : "s are"} stored in the older browser-only format. Import them into the campaign database so they are backed up with the rest of this world.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="primary-button text-xs" onClick={handleImportLegacy} disabled={importingLegacy}>
-              {importingLegacy ? "Importing…" : "Import notes"}
-            </button>
-            <button type="button" className="secondary-button text-xs" onClick={() => setLegacyDismissed(true)} disabled={importingLegacy}>
-              Not now
-            </button>
-          </div>
-        </section>
-      )}
+      {!entriesLoading &&
+        !entriesLoadFailed &&
+        pendingLegacyEntries.length > 0 &&
+        !legacyDismissed && (
+          <section
+            className="section-card border-amber-500/40 space-y-3"
+            aria-labelledby="legacy-import-heading"
+          >
+            <div>
+              <h2 id="legacy-import-heading" className="text-sm font-semibold text-amber-200">
+                Local notes found
+              </h2>
+              <p className="mt-1 text-xs text-slate-400">
+                {pendingLegacyEntries.length} note
+                {pendingLegacyEntries.length === 1 ? " is" : "s are"} stored in the older
+                browser-only format. Import them into the campaign database so they are backed up
+                with the rest of this world.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="primary-button text-xs"
+                onClick={handleImportLegacy}
+                disabled={importingLegacy}
+              >
+                {importingLegacy ? "Importing…" : "Import notes"}
+              </button>
+              <button
+                type="button"
+                className="secondary-button text-xs"
+                onClick={() => setLegacyDismissed(true)}
+                disabled={importingLegacy}
+              >
+                Not now
+              </button>
+            </div>
+          </section>
+        )}
 
       <div aria-live="polite">
-        {entriesError && <p className="status-error" role="alert">{entriesError}</p>}
+        {entriesError && (
+          <p className="status-error" role="alert">
+            {entriesError}
+          </p>
+        )}
         {message && <p className="status-success">{message}</p>}
       </div>
 
       <section className="section-card space-y-3" aria-label="Search and filter the world index">
         <div className="grid gap-3 sm:grid-cols-[1fr_15rem]">
           <div>
-            <label htmlFor="index-search" className="sr-only">Search index entries and templates</label>
+            <label htmlFor="index-search" className="sr-only">
+              Search index entries and templates
+            </label>
             <input
               id="index-search"
               type="search"
@@ -603,7 +688,9 @@ export function WorldIndexPage() {
             />
           </div>
           <div>
-            <label htmlFor="index-filter" className="sr-only">Filter index entries by category</label>
+            <label htmlFor="index-filter" className="sr-only">
+              Filter index entries by category
+            </label>
             <select
               id="index-filter"
               className="input-field"
@@ -612,7 +699,9 @@ export function WorldIndexPage() {
             >
               <option value="all">All categories</option>
               {WORLD_ENTRY_CATEGORIES.map((category) => (
-                <option key={category} value={category}>{CATEGORY_INFO[category].label}</option>
+                <option key={category} value={category}>
+                  {CATEGORY_INFO[category].label}
+                </option>
               ))}
             </select>
           </div>
@@ -620,55 +709,112 @@ export function WorldIndexPage() {
       </section>
 
       <div className="grid items-start gap-6 lg:grid-cols-[2fr_1fr]">
-        <aside ref={editorRef} className="section-card space-y-4 lg:order-2 lg:sticky lg:top-4" aria-labelledby="index-editor-heading">
+        <aside
+          ref={editorRef}
+          className="section-card space-y-4 lg:order-2 lg:sticky lg:top-4"
+          aria-labelledby="index-editor-heading"
+        >
           <header>
             <h2 id="index-editor-heading" className="text-lg font-semibold text-slate-100">
               {editingEntry ? "Edit index entry" : "New index entry"}
             </h2>
-            <p className="mt-1 text-xs text-slate-500">Only the title is required; add detail now or grow the entry over time.</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Only the title is required; add detail now or grow the entry over time.
+            </p>
           </header>
           <form className="space-y-3" onSubmit={handleSaveEntry}>
             <div>
-              <label htmlFor="index-entry-title" className="block text-xs font-semibold text-slate-400 mb-1">Title <span aria-hidden="true">*</span></label>
+              <label
+                htmlFor="index-entry-title"
+                className="block text-xs font-semibold text-slate-400 mb-1"
+              >
+                Title <span aria-hidden="true">*</span>
+              </label>
               <input
                 id="index-entry-title"
                 className="input-field"
                 value={formState.title}
                 maxLength={180}
                 required
-                disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy}
-                onChange={(event) => setFormState((current) => ({ ...current, title: event.target.value }))}
+                disabled={
+                  entriesLoading ||
+                  entriesLoadFailed ||
+                  saving ||
+                  Boolean(deletingId) ||
+                  importingLegacy
+                }
+                onChange={(event) =>
+                  setFormState((current) => ({ ...current, title: event.target.value }))
+                }
               />
             </div>
             <div>
-              <label htmlFor="index-entry-category" className="block text-xs font-semibold text-slate-400 mb-1">Category</label>
+              <label
+                htmlFor="index-entry-category"
+                className="block text-xs font-semibold text-slate-400 mb-1"
+              >
+                Category
+              </label>
               <select
                 id="index-entry-category"
                 className="input-field"
                 value={formState.category}
-                disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy}
-                onChange={(event) => setFormState((current) => ({ ...current, category: event.target.value as WorldEntryCategory }))}
+                disabled={
+                  entriesLoading ||
+                  entriesLoadFailed ||
+                  saving ||
+                  Boolean(deletingId) ||
+                  importingLegacy
+                }
+                onChange={(event) =>
+                  setFormState((current) => ({
+                    ...current,
+                    category: event.target.value as WorldEntryCategory,
+                  }))
+                }
               >
                 {WORLD_ENTRY_CATEGORIES.map((category) => (
-                  <option key={category} value={category}>{CATEGORY_INFO[category].label}</option>
+                  <option key={category} value={category}>
+                    {CATEGORY_INFO[category].label}
+                  </option>
                 ))}
               </select>
-              <p className="mt-1 text-[11px] text-slate-500">{CATEGORY_INFO[formState.category].description}</p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                {CATEGORY_INFO[formState.category].description}
+              </p>
             </div>
             <div>
-              <label htmlFor="index-entry-summary" className="block text-xs font-semibold text-slate-400 mb-1">Quick summary</label>
+              <label
+                htmlFor="index-entry-summary"
+                className="block text-xs font-semibold text-slate-400 mb-1"
+              >
+                Quick summary
+              </label>
               <textarea
                 id="index-entry-summary"
                 className="input-field"
                 rows={2}
                 maxLength={500}
                 value={formState.summary}
-                disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy}
-                onChange={(event) => setFormState((current) => ({ ...current, summary: event.target.value }))}
+                disabled={
+                  entriesLoading ||
+                  entriesLoadFailed ||
+                  saving ||
+                  Boolean(deletingId) ||
+                  importingLegacy
+                }
+                onChange={(event) =>
+                  setFormState((current) => ({ ...current, summary: event.target.value }))
+                }
               />
             </div>
             <div>
-              <label htmlFor="index-entry-body" className="block text-xs font-semibold text-slate-400 mb-1">Full entry</label>
+              <label
+                htmlFor="index-entry-body"
+                className="block text-xs font-semibold text-slate-400 mb-1"
+              >
+                Full entry
+              </label>
               <textarea
                 id="index-entry-body"
                 className="input-field"
@@ -676,25 +822,57 @@ export function WorldIndexPage() {
                 maxLength={20000}
                 placeholder="Write the detailed, table-ready reference here…"
                 value={formState.body}
-                disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy}
-                onChange={(event) => setFormState((current) => ({ ...current, body: event.target.value }))}
+                disabled={
+                  entriesLoading ||
+                  entriesLoadFailed ||
+                  saving ||
+                  Boolean(deletingId) ||
+                  importingLegacy
+                }
+                onChange={(event) =>
+                  setFormState((current) => ({ ...current, body: event.target.value }))
+                }
               />
             </div>
             <div>
-              <label htmlFor="index-entry-tags" className="block text-xs font-semibold text-slate-400 mb-1">Tags</label>
+              <label
+                htmlFor="index-entry-tags"
+                className="block text-xs font-semibold text-slate-400 mb-1"
+              >
+                Tags
+              </label>
               <input
                 id="index-entry-tags"
                 className="input-field"
                 placeholder="politics, session 4, unresolved"
                 value={formState.tags}
                 maxLength={500}
-                disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy}
-                onChange={(event) => setFormState((current) => ({ ...current, tags: event.target.value }))}
+                disabled={
+                  entriesLoading ||
+                  entriesLoadFailed ||
+                  saving ||
+                  Boolean(deletingId) ||
+                  importingLegacy
+                }
+                onChange={(event) =>
+                  setFormState((current) => ({ ...current, tags: event.target.value }))
+                }
               />
               <p className="mt-1 text-[11px] text-slate-500">Separate tags with commas.</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button type="submit" className="primary-button" disabled={entriesLoading || entriesLoadFailed || saving || Boolean(deletingId) || importingLegacy || !formState.title.trim()}>
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={
+                  entriesLoading ||
+                  entriesLoadFailed ||
+                  saving ||
+                  Boolean(deletingId) ||
+                  importingLegacy ||
+                  !formState.title.trim()
+                }
+              >
                 {saving ? "Saving…" : editingEntry ? "Save changes" : "Add to index"}
               </button>
               {(editingEntry || formDirty) && (
@@ -713,49 +891,98 @@ export function WorldIndexPage() {
           </form>
         </aside>
 
-        <section className="section-card space-y-4 lg:order-1" aria-labelledby="codex-entries-heading">
+        <section
+          className="section-card space-y-4 lg:order-1"
+          aria-labelledby="codex-entries-heading"
+        >
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <h2 id="codex-entries-heading" className="text-lg font-semibold text-slate-100">Codex entries</h2>
-              {!entriesLoading && <p className="text-xs text-slate-500">{filteredEntries.length} shown · {entries.length} total</p>}
+              <h2 id="codex-entries-heading" className="text-lg font-semibold text-slate-100">
+                Codex entries
+              </h2>
+              {!entriesLoading && (
+                <p className="text-xs text-slate-500">
+                  {filteredEntries.length} shown · {entries.length} total
+                </p>
+              )}
             </div>
             {entriesLoadFailed && (
-              <button type="button" className="secondary-button text-xs" onClick={() => setEntryReloadKey((key) => key + 1)}>Reload entries</button>
+              <button
+                type="button"
+                className="secondary-button text-xs"
+                onClick={() => setEntryReloadKey((key) => key + 1)}
+              >
+                Reload entries
+              </button>
             )}
           </div>
 
           {entriesLoading ? (
-            <p className="text-sm text-slate-400" role="status">Loading index entries…</p>
+            <p className="text-sm text-slate-400" role="status">
+              Loading index entries…
+            </p>
           ) : entriesLoadFailed ? (
-            <p className="text-sm text-slate-500">The index is unavailable. Reload it to try again.</p>
+            <p className="text-sm text-slate-500">
+              The index is unavailable. Reload it to try again.
+            </p>
           ) : filteredEntries.length === 0 ? (
             <p className="text-sm text-slate-500">
-              {entries.length === 0 ? "No index entries yet. Use the editor to create the first one." : "No entries match the current search and category."}
+              {entries.length === 0
+                ? "No index entries yet. Use the editor to create the first one."
+                : "No entries match the current search and category."}
             </p>
           ) : (
             <div className="space-y-3">
               {filteredEntries.map((entry) => {
                 const tags = getEntryTags(entry);
                 return (
-                  <article key={entry.id} className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 space-y-3">
+                  <article
+                    key={entry.id}
+                    className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 space-y-3"
+                  >
                     <header className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-300">{CATEGORY_INFO[entry.category]?.label ?? entry.category}</p>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-300">
+                          {CATEGORY_INFO[entry.category]?.label ?? entry.category}
+                        </p>
                         <h3 className="mt-1 text-lg font-semibold text-slate-100">{entry.title}</h3>
                       </div>
-                      <time className="shrink-0 text-[11px] text-slate-500" dateTime={new Date(entry.created_at * 1000).toISOString()}>
+                      <time
+                        className="shrink-0 text-[11px] text-slate-500"
+                        dateTime={new Date(entry.created_at * 1000).toISOString()}
+                      >
                         {new Date(entry.created_at * 1000).toLocaleDateString()}
                       </time>
                     </header>
-                    {entry.summary && <p className="text-sm font-medium text-slate-300">{entry.summary}</p>}
-                    {entry.body && <p className="max-h-48 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-400">{entry.body}</p>}
+                    {entry.summary && (
+                      <p className="text-sm font-medium text-slate-300">{entry.summary}</p>
+                    )}
+                    {entry.body && (
+                      <p className="max-h-48 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-400">
+                        {entry.body}
+                      </p>
+                    )}
                     {tags.length > 0 && (
                       <ul className="flex flex-wrap gap-1.5" aria-label="Tags">
-                        {tags.map((tag) => <li key={tag} className="rounded-full bg-slate-800 px-2 py-1 text-[11px] text-slate-300">#{tag}</li>)}
+                        {tags.map((tag) => (
+                          <li
+                            key={tag}
+                            className="rounded-full bg-slate-800 px-2 py-1 text-[11px] text-slate-300"
+                          >
+                            #{tag}
+                          </li>
+                        ))}
                       </ul>
                     )}
                     <div className="flex gap-3 text-xs">
-                      <button type="button" className="text-sky-300 hover:text-sky-200" onClick={() => handleEditEntry(entry)} disabled={Boolean(saving || deletingId || importingLegacy)}>Edit</button>
+                      <button
+                        type="button"
+                        className="text-sky-300 hover:text-sky-200"
+                        onClick={() => handleEditEntry(entry)}
+                        disabled={Boolean(saving || deletingId || importingLegacy)}
+                      >
+                        Edit
+                      </button>
                       <button
                         type="button"
                         className="text-red-300 hover:text-red-200 disabled:opacity-50"
@@ -777,33 +1004,57 @@ export function WorldIndexPage() {
       <section className="section-card space-y-4" aria-labelledby="template-reference-heading">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h2 id="template-reference-heading" className="text-lg font-semibold text-slate-100">Template reference</h2>
-            <p className="mt-1 text-xs text-slate-500">Read-only structures created with this world. The search above filters their names and fields.</p>
+            <h2 id="template-reference-heading" className="text-lg font-semibold text-slate-100">
+              Template reference
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Read-only structures created with this world. The search above filters their names and
+              fields.
+            </p>
           </div>
-          {templatesError && <button type="button" className="secondary-button text-xs" onClick={() => setTemplateReloadKey((key) => key + 1)}>Reload templates</button>}
+          {templatesError && (
+            <button
+              type="button"
+              className="secondary-button text-xs"
+              onClick={() => setTemplateReloadKey((key) => key + 1)}
+            >
+              Reload templates
+            </button>
+          )}
         </div>
 
         {templatesLoading ? (
-          <p className="text-sm text-slate-400" role="status">Loading template definitions…</p>
+          <p className="text-sm text-slate-400" role="status">
+            Loading template definitions…
+          </p>
         ) : templatesError ? (
-          <p className="status-error" role="alert">{templatesError}</p>
+          <p className="status-error" role="alert">
+            {templatesError}
+          </p>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {(Object.keys(filteredTemplates) as TemplateType[]).map((type) => (
               <article key={type} className="rounded-xl border border-slate-800 p-4 space-y-3">
                 <header>
                   <div className="flex items-start justify-between gap-3">
-                    <h3 className="text-sm font-semibold text-slate-100">{TEMPLATE_HEADINGS[type]}</h3>
+                    <h3 className="text-sm font-semibold text-slate-100">
+                      {TEMPLATE_HEADINGS[type]}
+                    </h3>
                     <span className="text-xs text-slate-500">{filteredTemplates[type].length}</span>
                   </div>
                   <p className="mt-1 text-[11px] text-slate-500">{TEMPLATE_DESCRIPTIONS[type]}</p>
                 </header>
                 {filteredTemplates[type].length === 0 ? (
-                  <p className="text-xs text-slate-500">{normalizedSearch ? "No matching templates." : "No templates stored."}</p>
+                  <p className="text-xs text-slate-500">
+                    {normalizedSearch ? "No matching templates." : "No templates stored."}
+                  </p>
                 ) : (
                   <div className="space-y-2">
                     {filteredTemplates[type].map((template) => (
-                      <div key={template.id} className="rounded border border-slate-800 bg-slate-900/30 p-3 space-y-2">
+                      <div
+                        key={template.id}
+                        className="rounded border border-slate-800 bg-slate-900/30 p-3 space-y-2"
+                      >
                         <h4 className="text-sm font-medium text-slate-200">{template.name}</h4>
                         {renderDefinitionRows(template)}
                       </div>

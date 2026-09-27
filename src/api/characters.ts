@@ -13,10 +13,7 @@ export async function listCharacters(worldId: string): Promise<Character[]> {
   return await invokeOrThrow<Character[]>("list_characters", { worldId });
 }
 
-export async function createCharacter(
-  worldId: string,
-  name: string
-): Promise<Character> {
+export async function createCharacter(worldId: string, name: string): Promise<Character> {
   return await invokeOrThrow<Character>("create_character", { worldId, name });
 }
 
@@ -24,7 +21,7 @@ export async function updateCharacter(
   id: string,
   name: string,
   notes: string,
-  attributesJson?: string
+  attributesJson?: string,
 ): Promise<Character> {
   return await invokeOrThrow<Character>("update_character", {
     id,

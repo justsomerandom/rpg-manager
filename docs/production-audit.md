@@ -2,6 +2,9 @@
 
 Date: 2026-07-22
 
+> This is a historical record of the July 2026 hardening pass. For current setup and
+> verification commands, use the repository README and `AGENTS.md`.
+
 This pass evaluated the application against the intended GM outcomes described in the project brief. It covered the React/Tauri boundary, database ownership and migrations, every route-level workflow, both map editors, accessibility, failure states, and desktop packaging configuration.
 
 ## Major changes

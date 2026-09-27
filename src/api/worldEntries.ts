@@ -24,7 +24,7 @@ export type WorldEntry = {
 
 export async function listWorldEntries(
   worldId: string,
-  category?: WorldEntryCategory
+  category?: WorldEntryCategory,
 ): Promise<WorldEntry[]> {
   return await invokeOrThrow<WorldEntry[]>("list_world_entries", {
     worldId,
@@ -38,7 +38,7 @@ export async function createWorldEntry(
   title: string,
   summary: string,
   body: string,
-  metadataJson?: string
+  metadataJson?: string,
 ): Promise<WorldEntry> {
   return await invokeOrThrow<WorldEntry>("create_world_entry", {
     worldId,
@@ -56,7 +56,7 @@ export async function updateWorldEntry(
   title: string,
   summary: string,
   body: string,
-  metadataJson?: string
+  metadataJson?: string,
 ): Promise<WorldEntry> {
   return await invokeOrThrow<WorldEntry>("update_world_entry", {
     id,

@@ -105,12 +105,12 @@ function CharacterEditor({
 }: Pick<WorldSetupEditorProps, "templates" | "onChange" | "issue" | "errorMessageId">) {
   const updateFeature = (
     featureId: string,
-    patch: Partial<WorldSetupTemplates["character"][number]>
+    patch: Partial<WorldSetupTemplates["character"][number]>,
   ) => {
     onChange((current) => ({
       ...current,
       character: current.character.map((feature) =>
-        feature.id === featureId ? { ...feature, ...patch } : feature
+        feature.id === featureId ? { ...feature, ...patch } : feature,
       ),
     }));
   };
@@ -126,10 +126,9 @@ function CharacterEditor({
           return {
             ...feature,
             type,
-            min: usesRange ? feature.min ?? 0 : undefined,
-            max: usesRange ? feature.max ?? 10 : undefined,
-            entityId:
-              type === "custom_entity" ? feature.entityId ?? fallbackEntityId : undefined,
+            min: usesRange ? (feature.min ?? 0) : undefined,
+            max: usesRange ? (feature.max ?? 10) : undefined,
+            entityId: type === "custom_entity" ? (feature.entityId ?? fallbackEntityId) : undefined,
           };
         }),
       };
@@ -170,18 +169,17 @@ function CharacterEditor({
         const usesRange = feature.type === "number_stat" || feature.type === "number_resource";
         const invalid = issue?.fieldId === feature.id;
         return (
-          <article
-            key={feature.id}
-            id={fieldAnchorId(feature.id)}
-            className="setup-editor-card"
-          >
+          <article key={feature.id} id={fieldAnchorId(feature.id)} className="setup-editor-card">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-semibold text-earth-sand">Character field {index + 1}</p>
               <RemoveButton label="Remove field" onClick={() => removeFeature(feature.id)} />
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <label htmlFor={labelId} className="mb-1.5 block text-sm font-medium text-slate-300">
+                <label
+                  htmlFor={labelId}
+                  className="mb-1.5 block text-sm font-medium text-slate-300"
+                >
                   Field label
                 </label>
                 <input
@@ -237,7 +235,10 @@ function CharacterEditor({
                       const value = event.target.value;
                       const parsed = value === "" ? undefined : Number(value);
                       updateFeature(feature.id, {
-                        min: typeof parsed === "number" && Number.isFinite(parsed) ? parsed : undefined,
+                        min:
+                          typeof parsed === "number" && Number.isFinite(parsed)
+                            ? parsed
+                            : undefined,
                       });
                     }}
                   />
@@ -260,7 +261,10 @@ function CharacterEditor({
                       const value = event.target.value;
                       const parsed = value === "" ? undefined : Number(value);
                       updateFeature(feature.id, {
-                        max: typeof parsed === "number" && Number.isFinite(parsed) ? parsed : undefined,
+                        max:
+                          typeof parsed === "number" && Number.isFinite(parsed)
+                            ? parsed
+                            : undefined,
                       });
                     }}
                   />
@@ -368,7 +372,10 @@ function NpcEditor({
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <label htmlFor={`npc-name-${npc.id}`} className="mb-1.5 block text-sm font-medium text-slate-300">
+              <label
+                htmlFor={`npc-name-${npc.id}`}
+                className="mb-1.5 block text-sm font-medium text-slate-300"
+              >
                 Template name
               </label>
               <input
@@ -382,7 +389,10 @@ function NpcEditor({
               />
             </div>
             <div>
-              <label htmlFor={`npc-role-${npc.id}`} className="mb-1.5 block text-sm font-medium text-slate-300">
+              <label
+                htmlFor={`npc-role-${npc.id}`}
+                className="mb-1.5 block text-sm font-medium text-slate-300"
+              >
                 Role or label
               </label>
               <input
@@ -397,7 +407,10 @@ function NpcEditor({
             </div>
           </div>
           <div>
-            <label htmlFor={`npc-notes-${npc.id}`} className="mb-1.5 block text-sm font-medium text-slate-300">
+            <label
+              htmlFor={`npc-notes-${npc.id}`}
+              className="mb-1.5 block text-sm font-medium text-slate-300"
+            >
               Starting notes
             </label>
             <textarea
@@ -434,10 +447,7 @@ function NpcEditor({
   );
 }
 
-const GROUP_COPY: Record<
-  FieldTemplateGroup,
-  { singular: string; empty: string; field: string }
-> = {
+const GROUP_COPY: Record<FieldTemplateGroup, { singular: string; empty: string; field: string }> = {
   item: {
     singular: "item template",
     empty: "No item blueprints will be included in this world's starting structure.",
@@ -468,7 +478,9 @@ function CollectionEditor({
   const collection = templates[group];
 
   const mutateCollection = (
-    updater: (items: WorldSetupTemplates[FieldTemplateGroup]) => WorldSetupTemplates[FieldTemplateGroup]
+    updater: (
+      items: WorldSetupTemplates[FieldTemplateGroup],
+    ) => WorldSetupTemplates[FieldTemplateGroup],
   ) => {
     onChange((current) => ({ ...current, [group]: updater(current[group]) }));
   };
@@ -491,7 +503,7 @@ function CollectionEditor({
 
   const updateTemplateName = (templateId: string, name: string) => {
     mutateCollection((items) =>
-      items.map((template) => (template.id === templateId ? { ...template, name } : template))
+      items.map((template) => (template.id === templateId ? { ...template, name } : template)),
     );
   };
 
@@ -502,11 +514,11 @@ function CollectionEditor({
           ? {
               ...template,
               fields: template.fields.map((field) =>
-                field.id === fieldId ? { ...field, ...patch } : field
+                field.id === fieldId ? { ...field, ...patch } : field,
               ),
             }
-          : template
-      )
+          : template,
+      ),
     );
   };
 
@@ -525,8 +537,8 @@ function CollectionEditor({
                 },
               ],
             }
-          : template
-      )
+          : template,
+      ),
     );
   };
 
@@ -535,8 +547,8 @@ function CollectionEditor({
       items.map((template) =>
         template.id === templateId
           ? { ...template, fields: template.fields.filter((field) => field.id !== fieldId) }
-          : template
-      )
+          : template,
+      ),
     );
   };
 
@@ -555,7 +567,7 @@ function CollectionEditor({
         const referenced =
           group === "customEntities" &&
           templates.character.some(
-            (feature) => feature.type === "custom_entity" && feature.entityId === template.id
+            (feature) => feature.type === "custom_entity" && feature.entityId === template.id,
           );
         return (
           <article key={template.id} id={fieldAnchorId(template.id)} className="setup-editor-card">

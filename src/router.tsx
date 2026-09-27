@@ -29,7 +29,9 @@ function RouteErrorPage() {
         <h1 className="mt-3 font-display text-3xl font-semibold">This page hit a snag</h1>
         <p className="mt-3 text-sm leading-6 text-slate-300">{message}</p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
-          <Link className="secondary-button" to="/">Return to worlds</Link>
+          <Link className="secondary-button" to="/">
+            Return to worlds
+          </Link>
           <button className="primary-button" type="button" onClick={() => window.location.reload()}>
             Reload application
           </button>
@@ -48,7 +50,9 @@ function NotFoundPage() {
         <p className="mt-3 text-sm leading-6 text-slate-300">
           The destination may have moved, or the link may be incomplete.
         </p>
-        <Link className="primary-button mt-6" to="/">Return to worlds</Link>
+        <Link className="primary-button mt-6" to="/">
+          Return to worlds
+        </Link>
       </section>
     </main>
   );

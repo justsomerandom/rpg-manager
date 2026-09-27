@@ -16,7 +16,10 @@
 
   body {
     @apply bg-brand-deep text-brand-glow antialiased font-sans;
-    background-image: radial-gradient(circle at 8% -10%, rgba(43, 184, 131, 0.22), transparent 34%), radial-gradient(circle at 100% 0%, rgba(194, 143, 92, 0.16), transparent 28%), linear-gradient(135deg, #06140e 0%, #081b13 48%, #04100b 100%);
+    background-image:
+      radial-gradient(circle at 8% -10%, rgba(43, 184, 131, 0.22), transparent 34%),
+      radial-gradient(circle at 100% 0%, rgba(194, 143, 92, 0.16), transparent 28%),
+      linear-gradient(135deg, #06140e 0%, #081b13 48%, #04100b 100%);
     margin: 0;
     min-width: 320px;
   }
@@ -38,13 +41,26 @@
     color-scheme: dark;
   }
 
-  button, a, input, textarea, select {
+  button,
+  a,
+  input,
+  textarea,
+  select {
     @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-earth-sand focus-visible:ring-offset-2 focus-visible:ring-offset-grove-900;
   }
 
-  button:disabled { @apply cursor-not-allowed opacity-50; }
-  ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-thumb { background: rgba(95, 127, 111, .55); border: 3px solid #081b13; border-radius: 99px; }
+  button:disabled {
+    @apply cursor-not-allowed opacity-50;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(95, 127, 111, 0.55);
+    border: 3px solid #081b13;
+    border-radius: 99px;
+  }
 
   @media (prefers-reduced-motion: reduce) {
     *,
@@ -61,7 +77,9 @@
 @layer components {
   .glass-panel {
     @apply rounded-2xl border border-grove-600/70 bg-grove-900/75 backdrop-blur-xl shadow-panel;
-    box-shadow: inset 0 1px 0 rgba(227, 242, 219, 0.08), 0 18px 45px rgba(1, 10, 6, 0.45);
+    box-shadow:
+      inset 0 1px 0 rgba(227, 242, 219, 0.08),
+      0 18px 45px rgba(1, 10, 6, 0.45);
   }
 
   .panel-heading {
@@ -88,17 +106,39 @@
     @apply inline-flex min-h-10 min-w-10 items-center justify-center rounded-xl border border-transparent text-slate-300 transition hover:border-grove-600 hover:bg-grove-700/70 hover:text-white;
   }
 
-  .page-shell { @apply mx-auto w-full max-w-7xl space-y-7 pb-10; }
-  .page-header { @apply flex flex-col gap-3 border-b border-grove-700/70 pb-5 sm:flex-row sm:items-end sm:justify-between; }
-  .page-title { @apply font-display text-2xl font-semibold tracking-tight text-brand-glow sm:text-3xl; }
-  .page-description { @apply max-w-2xl text-sm leading-6 text-slate-300; }
-  .section-card { @apply glass-panel p-5 sm:p-6; }
-  .section-label { @apply text-xs font-bold uppercase tracking-[0.16em] text-earth-sand/80; }
-  .empty-state { @apply rounded-xl border border-dashed border-grove-600 bg-grove-800/30 px-5 py-8 text-center text-sm text-slate-300; }
-  .status-error { @apply rounded-xl border border-red-400/40 bg-red-950/30 px-4 py-3 text-sm text-red-100; }
-  .status-info { @apply rounded-xl border border-brand/30 bg-brand/10 px-4 py-3 text-sm text-brand-glow; }
-  .status-success { @apply rounded-xl border border-emerald-400/40 bg-emerald-950/30 px-4 py-3 text-sm text-emerald-100; }
-  .status-warning { @apply rounded-xl border border-amber-400/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-100; }
+  .page-shell {
+    @apply mx-auto w-full max-w-7xl space-y-7 pb-10;
+  }
+  .page-header {
+    @apply flex flex-col gap-3 border-b border-grove-700/70 pb-5 sm:flex-row sm:items-end sm:justify-between;
+  }
+  .page-title {
+    @apply font-display text-2xl font-semibold tracking-tight text-brand-glow sm:text-3xl;
+  }
+  .page-description {
+    @apply max-w-2xl text-sm leading-6 text-slate-300;
+  }
+  .section-card {
+    @apply glass-panel p-5 sm:p-6;
+  }
+  .section-label {
+    @apply text-xs font-bold uppercase tracking-[0.16em] text-earth-sand/80;
+  }
+  .empty-state {
+    @apply rounded-xl border border-dashed border-grove-600 bg-grove-800/30 px-5 py-8 text-center text-sm text-slate-300;
+  }
+  .status-error {
+    @apply rounded-xl border border-red-400/40 bg-red-950/30 px-4 py-3 text-sm text-red-100;
+  }
+  .status-info {
+    @apply rounded-xl border border-brand/30 bg-brand/10 px-4 py-3 text-sm text-brand-glow;
+  }
+  .status-success {
+    @apply rounded-xl border border-emerald-400/40 bg-emerald-950/30 px-4 py-3 text-sm text-emerald-100;
+  }
+  .status-warning {
+    @apply rounded-xl border border-amber-400/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-100;
+  }
 
   .skip-link {
     @apply fixed left-4 top-3 z-50 -translate-y-20 rounded-lg bg-earth-sand px-4 py-2 text-sm font-semibold text-grove-900 shadow-xl transition focus:translate-y-0;
@@ -127,7 +167,12 @@
       radial-gradient(circle at 70% 92%, rgba(31, 156, 115, 0.09), transparent 35rem),
       linear-gradient(rgba(227, 242, 219, 0.022) 1px, transparent 1px),
       linear-gradient(90deg, rgba(227, 242, 219, 0.022) 1px, transparent 1px);
-    background-size: auto, auto, auto, 64px 64px, 64px 64px;
+    background-size:
+      auto,
+      auto,
+      auto,
+      64px 64px,
+      64px 64px;
   }
 
   .home-atmosphere::before,
@@ -169,9 +214,7 @@
 
   .brand-emblem {
     @apply flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-brand/35;
-    background:
-      linear-gradient(145deg, rgba(31, 156, 115, 0.24), rgba(11, 37, 25, 0.78)),
-      #0b2519;
+    background: linear-gradient(145deg, rgba(31, 156, 115, 0.24), rgba(11, 37, 25, 0.78)), #0b2519;
     box-shadow:
       inset 0 1px 0 rgba(227, 242, 219, 0.12),
       0 12px 28px rgba(1, 10, 6, 0.3);
@@ -228,7 +271,9 @@
   .world-card-orbit {
     @apply pointer-events-none absolute rounded-full border;
     border-color: rgba(169, 194, 173, 0.14);
-    transition: transform 300ms ease, border-color 180ms ease;
+    transition:
+      transform 300ms ease,
+      border-color 180ms ease;
   }
 
   .world-card-orbit-one {
@@ -279,11 +324,8 @@
   .world-dialog {
     @apply fixed inset-0 m-0 h-full max-h-none w-full max-w-none border-0 bg-transparent text-brand-glow;
     overflow: auto;
-    padding:
-      max(0.75rem, env(safe-area-inset-top))
-      max(0.75rem, env(safe-area-inset-right))
-      max(0.75rem, env(safe-area-inset-bottom))
-      max(0.75rem, env(safe-area-inset-left));
+    padding: max(0.75rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right))
+      max(0.75rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
   }
 
   .world-dialog[open] {
@@ -299,8 +341,7 @@
   .dialog-surface {
     @apply relative w-full rounded-3xl border border-grove-600/80 text-brand-glow;
     background:
-      linear-gradient(145deg, rgba(18, 52, 37, 0.3), transparent 36%),
-      rgba(3, 19, 13, 0.98);
+      linear-gradient(145deg, rgba(18, 52, 37, 0.3), transparent 36%), rgba(3, 19, 13, 0.98);
     box-shadow:
       inset 0 1px 0 rgba(227, 242, 219, 0.1),
       0 32px 90px rgba(0, 7, 4, 0.72);
@@ -311,7 +352,9 @@
     @apply rounded-2xl border border-grove-600/65 bg-grove-900/45 p-4 sm:p-5;
     scroll-margin-top: 1rem;
     box-shadow: inset 0 1px 0 rgba(227, 242, 219, 0.045);
-    transition: border-color 160ms ease, background-color 160ms ease;
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease;
   }
 
   .setup-editor-card > * + * {
@@ -333,11 +376,8 @@
     }
 
     .world-dialog {
-      padding:
-        max(1.5rem, env(safe-area-inset-top))
-        max(1.5rem, env(safe-area-inset-right))
-        max(1.5rem, env(safe-area-inset-bottom))
-        max(1.5rem, env(safe-area-inset-left));
+      padding: max(1.5rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right))
+        max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
     }
   }
 
@@ -374,16 +414,35 @@
 }
 
 @keyframes loading-pulse {
-  0%, 100% { opacity: .35; transform: scale(.8); }
-  50% { opacity: 1; transform: scale(1); }
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 @keyframes home-card-enter {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes dialog-enter {
-  from { opacity: 0; transform: translateY(10px) scale(0.99); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }

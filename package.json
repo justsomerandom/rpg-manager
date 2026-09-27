@@ -1,13 +1,23 @@
 {
   "name": "rpg-manager",
+  "description": "Offline desktop campaign and worldbuilding manager",
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0",
+    "npm": ">=10"
+  },
   "scripts": {
     "dev": "tauri dev",
     "dev:web": "vite",
-    "check": "tsc --noEmit",
-    "build": "tsc && vite build",
+    "build": "npm run typecheck && vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0 && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings",
+    "format": "prettier --write . && cargo fmt --manifest-path src-tauri/Cargo.toml --all",
+    "format:check": "prettier --check . && cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -18,14 +28,21 @@
     "react-router-dom": "^7.9.6"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.4.22",
+    "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.12.0",
     "postcss": "^8.5.6",
+    "prettier": "^3.9.9",
     "tailwindcss": "^3.4.15",
     "typescript": "~5.8.3",
+    "typescript-eslint": "^8.70.1",
     "vite": "^7.0.4"
   },
   "allowScripts": {

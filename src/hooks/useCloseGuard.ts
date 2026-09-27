@@ -20,8 +20,7 @@ type CloseGuardController = {
   confirmCloseRequest: () => Promise<void>;
 };
 
-const isTauriRuntime = () =>
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const isTauriRuntime = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 /**
  * Protects drafts from both browser unloads and Tauri's native window close button.

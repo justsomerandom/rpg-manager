@@ -25,6 +25,9 @@ export function WorldOverviewPage() {
     setSavedWorld(layoutWorld);
     setSaveError(null);
     setSaveMessage(null);
+    // Intentionally reset only when navigation resolves to another world; a
+    // context refresh must not overwrite local form edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutWorld.id, worldId]);
 
   const dirty = !sameWorldDetails(world, savedWorld);
@@ -35,7 +38,9 @@ export function WorldOverviewPage() {
   useEffect(() => {
     if (blocker.state !== "blocked") return;
     if (saving) {
-      window.alert("Your campaign is still being saved. Wait for it to finish before leaving this page.");
+      window.alert(
+        "Your campaign is still being saved. Wait for it to finish before leaving this page.",
+      );
       blocker.reset();
       return;
     }
@@ -49,7 +54,8 @@ export function WorldOverviewPage() {
   useCloseGuard({
     active: navigationBlocked,
     pending: saving,
-    pendingMessage: "Your campaign is still being saved. Wait for it to finish before leaving this page.",
+    pendingMessage:
+      "Your campaign is still being saved. Wait for it to finish before leaving this page.",
     confirmMessage: "Discard your unsaved campaign changes and leave this page?",
   });
 
@@ -110,7 +116,11 @@ export function WorldOverviewPage() {
       </header>
 
       <div aria-live="polite">
-        {saveError && <p className="status-error" role="alert">{saveError}</p>}
+        {saveError && (
+          <p className="status-error" role="alert">
+            {saveError}
+          </p>
+        )}
         {saveMessage && <p className="status-success">{saveMessage}</p>}
       </div>
 
@@ -132,7 +142,10 @@ export function WorldOverviewPage() {
         </div>
 
         <div>
-          <label htmlFor="world-game-system" className="block text-xs font-semibold text-slate-400 mb-1">
+          <label
+            htmlFor="world-game-system"
+            className="block text-xs font-semibold text-slate-400 mb-1"
+          >
             Game system
           </label>
           <input
@@ -147,7 +160,10 @@ export function WorldOverviewPage() {
         </div>
 
         <div>
-          <label htmlFor="world-description" className="block text-xs font-semibold text-slate-400 mb-1">
+          <label
+            htmlFor="world-description"
+            className="block text-xs font-semibold text-slate-400 mb-1"
+          >
             Description or pitch
           </label>
           <textarea

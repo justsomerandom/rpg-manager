@@ -183,7 +183,11 @@ function sanitizePoint(point: PixelPoint): { point: PixelPoint; changed: boolean
   const safe = { x: clamp(finiteX, 0, 1), y: clamp(finiteY, 0, 1) };
   return {
     point: safe,
-    changed: !Number.isFinite(point.x) || !Number.isFinite(point.y) || safe.x !== point.x || safe.y !== point.y,
+    changed:
+      !Number.isFinite(point.x) ||
+      !Number.isFinite(point.y) ||
+      safe.x !== point.x ||
+      safe.y !== point.y,
   };
 }
 
@@ -225,10 +229,7 @@ function squaredDistanceToSegment(point: PixelPoint, start: PixelPoint, end: Pix
  * Simplifies a polyline using Ramer-Douglas-Peucker. The tolerance is in the
  * same coordinate space as the provided points. Non-finite points are ignored.
  */
-export function simplifyPolyline(
-  points: readonly PixelPoint[],
-  tolerance: number
-): PixelPoint[] {
+export function simplifyPolyline(points: readonly PixelPoint[], tolerance: number): PixelPoint[] {
   const finitePoints = points.filter(isFinitePoint).map((point) => ({ ...point }));
   if (finitePoints.length <= 2 || !Number.isFinite(tolerance) || tolerance <= 0) {
     return finitePoints;
@@ -250,7 +251,7 @@ export function simplifyPolyline(
       const distance = squaredDistanceToSegment(
         finitePoints[index],
         finitePoints[startIndex],
-        finitePoints[endIndex]
+        finitePoints[endIndex],
       );
       if (distance > furthestDistance) {
         furthestDistance = distance;
@@ -282,7 +283,7 @@ export function samplePolyline(points: readonly PixelPoint[], spacing: number): 
       cumulative[index - 1] +
       Math.hypot(
         finitePoints[index].x - finitePoints[index - 1].x,
-        finitePoints[index].y - finitePoints[index - 1].y
+        finitePoints[index].y - finitePoints[index - 1].y,
       );
   }
 
@@ -324,11 +325,11 @@ function simplifyInGridSpace(
   points: readonly PixelPoint[],
   width: number,
   height: number,
-  toleranceCells: number
+  toleranceCells: number,
 ): PixelPoint[] {
   const gridPoints = points.map((point) => toGridPoint(point, width, height));
   return simplifyPolyline(gridPoints, toleranceCells).map((point) =>
-    fromGridPoint(point, width, height)
+    fromGridPoint(point, width, height),
   );
 }
 
@@ -336,11 +337,11 @@ function sampleInGridSpace(
   points: readonly PixelPoint[],
   width: number,
   height: number,
-  spacingCells: number
+  spacingCells: number,
 ): PixelPoint[] {
   const gridPoints = points.map((point) => toGridPoint(point, width, height));
   return samplePolyline(gridPoints, spacingCells).map((point) =>
-    fromGridPoint(point, width, height)
+    fromGridPoint(point, width, height),
   );
 }
 
@@ -348,7 +349,7 @@ function finiteOption(
   value: number | undefined,
   fallback: number,
   minimum: number,
-  maximum: number
+  maximum: number,
 ): number {
   return clamp(Number.isFinite(value) ? (value as number) : fallback, minimum, maximum);
 }
@@ -356,7 +357,7 @@ function finiteOption(
 function resolveOptions(
   map: MapStateExtended,
   options: RoadRoutingOptions | undefined,
-  cellCount: number
+  cellCount: number,
 ): ResolvedRoadRoutingOptions {
   const waterLevel = Number.isFinite(map.water_level) ? clamp(map.water_level, 0, 1) : 0.42;
   const maxStates = Math.max(1_024, cellCount * 9 * 17);
@@ -375,25 +376,15 @@ function resolveOptions(
       options?.highAltitudeThreshold,
       Math.max(0.66, waterLevel + 0.24),
       0,
-      1
+      1,
     ),
     vegetationPenalty: finiteOption(options?.vegetationPenalty, 0.72, 0, 20),
     biomePenalty: finiteOption(options?.biomePenalty, 0.62, 0, 20),
     bridgePenalty: finiteOption(options?.bridgePenalty, 28, 0, 5_000),
     turnPenalty: finiteOption(options?.turnPenalty, 0.42, 0, 20),
     existingRoadReward: finiteOption(options?.existingRoadReward, 0.58, 0, 0.78),
-    existingRoadProximityReward: finiteOption(
-      options?.existingRoadProximityReward,
-      0.2,
-      0,
-      0.6
-    ),
-    existingRoadProximityCells: finiteOption(
-      options?.existingRoadProximityCells,
-      3.5,
-      0,
-      24
-    ),
+    existingRoadProximityReward: finiteOption(options?.existingRoadProximityReward, 0.2, 0, 0.6),
+    existingRoadProximityCells: finiteOption(options?.existingRoadProximityCells, 3.5, 0, 24),
     naturalVariation: finiteOption(options?.naturalVariation, 0.2, 0, 0.8),
     guidePoints: guide,
     guideCorridorCells: finiteOption(options?.guideCorridorCells, 2.25, 0, 32),
@@ -403,29 +394,20 @@ function resolveOptions(
         options?.maxSearchNodes,
         Math.min(240_000, Math.max(12_000, cellCount * 8)),
         128,
-        maxStates
-      )
+        maxStates,
+      ),
     ),
-    freehandSampleSpacingCells: finiteOption(
-      options?.freehandSampleSpacingCells,
-      5,
-      1,
-      32
-    ),
+    freehandSampleSpacingCells: finiteOption(options?.freehandSampleSpacingCells, 5, 1, 32),
     freehandSimplifyToleranceCells: finiteOption(
       options?.freehandSimplifyToleranceCells,
       0.42,
       0,
-      3
+      3,
     ),
   };
 }
 
-function cellIndexForPoint(
-  point: PixelPoint,
-  width: number,
-  height: number
-): number {
+function cellIndexForPoint(point: PixelPoint, width: number, height: number): number {
   const x = Math.round(clamp(point.x * width - 0.5, 0, width - 1));
   const y = Math.round(clamp(point.y * height - 0.5, 0, height - 1));
   return y * width + x;
@@ -435,13 +417,16 @@ function rasterizeSegment(
   start: PixelPoint,
   end: PixelPoint,
   width: number,
-  height: number
+  height: number,
 ): number[] {
   const startX = clamp(start.x * width - 0.5, 0, width - 1);
   const startY = clamp(start.y * height - 0.5, 0, height - 1);
   const endX = clamp(end.x * width - 0.5, 0, width - 1);
   const endY = clamp(end.y * height - 0.5, 0, height - 1);
-  const steps = Math.max(1, Math.ceil(Math.max(Math.abs(endX - startX), Math.abs(endY - startY)) * 2));
+  const steps = Math.max(
+    1,
+    Math.ceil(Math.max(Math.abs(endX - startX), Math.abs(endY - startY)) * 2),
+  );
   const cells: number[] = [];
   let previous = -1;
   for (let step = 0; step <= steps; step += 1) {
@@ -457,11 +442,7 @@ function rasterizeSegment(
   return cells;
 }
 
-function rasterizePolyline(
-  points: readonly PixelPoint[],
-  width: number,
-  height: number
-): number[] {
+function rasterizePolyline(points: readonly PixelPoint[], width: number, height: number): number[] {
   if (!points.length) return [];
   if (points.length === 1) return [cellIndexForPoint(points[0], width, height)];
   const cells: number[] = [];
@@ -477,7 +458,7 @@ function rasterizePolyline(
 function buildDistanceField(
   points: readonly PixelPoint[],
   width: number,
-  height: number
+  height: number,
 ): Float32Array | null {
   const cells = rasterizePolyline(points, width, height);
   if (!cells.length) return null;
@@ -519,7 +500,7 @@ function buildDistanceField(
 function buildExistingRoadDistance(
   map: MapStateExtended,
   width: number,
-  height: number
+  height: number,
 ): Float32Array | null {
   const field = new Float32Array(width * height);
   field.fill(Number.POSITIVE_INFINITY);
@@ -565,7 +546,7 @@ function buildExistingRoadDistance(
 
 function createRoutingContext(
   map: MapStateExtended,
-  options?: RoadRoutingOptions
+  options?: RoadRoutingOptions,
 ): { context: RoutingContext | null; warnings: string[] } {
   const width = Math.trunc(map.width);
   const height = Math.trunc(map.height);
@@ -577,7 +558,10 @@ function createRoutingContext(
     width !== map.width ||
     height !== map.height
   ) {
-    return { context: null, warnings: ["Map dimensions are invalid; terrain routing was skipped."] };
+    return {
+      context: null,
+      warnings: ["Map dimensions are invalid; terrain routing was skipped."],
+    };
   }
   const cellCount = width * height;
   if (!Number.isSafeInteger(cellCount) || map.relief.length < cellCount) {
@@ -611,7 +595,7 @@ function createRoutingContext(
   const warnings: string[] = [];
   if (invalidCount > 0) {
     warnings.push(
-      `${invalidCount} terrain cell${invalidCount === 1 ? " was" : "s were"} invalid and treated as impassable.`
+      `${invalidCount} terrain cell${invalidCount === 1 ? " was" : "s were"} invalid and treated as impassable.`,
     );
   }
   return {
@@ -683,9 +667,9 @@ function stateIdFor(
   cellIndex: number,
   waterRun: number,
   direction: number,
-  maxBridgeCells: number
+  maxBridgeCells: number,
 ): number {
-  return ((cellIndex * (maxBridgeCells + 1) + waterRun) * 9) + direction + 1;
+  return (cellIndex * (maxBridgeCells + 1) + waterRun) * 9 + direction + 1;
 }
 
 function cellIndexFromState(stateId: number, maxBridgeCells: number): number {
@@ -713,7 +697,7 @@ function routeSearch(
   context: RoutingContext,
   from: PixelPoint,
   to: PixelPoint,
-  guidePoints: readonly PixelPoint[]
+  guidePoints: readonly PixelPoint[],
 ): SearchOutcome {
   const { width, height, options } = context;
   const startCell = cellIndexForPoint(from, width, height);
@@ -861,8 +845,7 @@ function routeSearch(
 
       gScore.set(stateId, tentativeG);
       cameFrom.set(stateId, current.stateId);
-      const heuristic =
-        octileDistance(x, y, goalX, goalY) * HEURISTIC_STEP_COST * HEURISTIC_WEIGHT;
+      const heuristic = octileDistance(x, y, goalX, goalY) * HEURISTIC_STEP_COST * HEURISTIC_WEIGHT;
       open.push({
         stateId,
         x,
@@ -881,7 +864,10 @@ function routeSearch(
   };
 }
 
-function analyzeTraversal(context: RoutingContext, points: readonly PixelPoint[]): TraversalAnalysis {
+function analyzeTraversal(
+  context: RoutingContext,
+  points: readonly PixelPoint[],
+): TraversalAnalysis {
   const cells = rasterizePolyline(points, context.width, context.height);
   let bridgeCells = 0;
   let waterRun = 0;
@@ -915,13 +901,13 @@ function analyzeTraversal(context: RoutingContext, points: readonly PixelPoint[]
 function polylineDistanceCells(
   points: readonly PixelPoint[],
   width: number,
-  height: number
+  height: number,
 ): number {
   let distance = 0;
   for (let index = 1; index < points.length; index += 1) {
     distance += Math.hypot(
       (points[index].x - points[index - 1].x) * width,
-      (points[index].y - points[index - 1].y) * height
+      (points[index].y - points[index - 1].y) * height,
     );
   }
   return distance;
@@ -950,7 +936,7 @@ function smoothPolyline(points: readonly PixelPoint[], strength: number): PixelP
 function isSafeReplacement(
   context: RoutingContext,
   original: readonly PixelPoint[],
-  candidate: readonly PixelPoint[]
+  candidate: readonly PixelPoint[],
 ): boolean {
   if (candidate.length < 2) return false;
   const originalAnalysis = analyzeTraversal(context, original);
@@ -966,7 +952,7 @@ function isSafeReplacement(
 function normalizeRoutedPolyline(
   context: RoutingContext,
   points: readonly PixelPoint[],
-  toleranceCells: number
+  toleranceCells: number,
 ): PixelPoint[] {
   if (points.length < 3) return points.map((point) => ({ ...point }));
   let normalized = points.map((point) => ({ ...point }));
@@ -977,7 +963,7 @@ function normalizeRoutedPolyline(
       normalized,
       context.width,
       context.height,
-      toleranceCells
+      toleranceCells,
     );
     if (isSafeReplacement(context, normalized, simplified)) normalized = simplified;
   }
@@ -989,17 +975,19 @@ function normalizeRoutedPolyline(
 function appendWarningsForTraversal(
   warnings: string[],
   analysis: TraversalAnalysis,
-  usedFallback: boolean
+  usedFallback: boolean,
 ): void {
   if (analysis.bridgeCells > 0) {
     warnings.push(
       usedFallback
         ? `The unrouted fallback guide crosses ${analysis.bridgeCells} water cell${analysis.bridgeCells === 1 ? "" : "s"}; review it before saving.`
-        : `Route requires ${analysis.bridgeCells} bridge cell${analysis.bridgeCells === 1 ? "" : "s"}.`
+        : `Route requires ${analysis.bridgeCells} bridge cell${analysis.bridgeCells === 1 ? "" : "s"}.`,
     );
   }
   if (analysis.maxGrade > 0.12) {
-    warnings.push(`Route crosses steep terrain (maximum normalized grade ${analysis.maxGrade.toFixed(2)}).`);
+    warnings.push(
+      `Route crosses steep terrain (maximum normalized grade ${analysis.maxGrade.toFixed(2)}).`,
+    );
   }
 }
 
@@ -1011,7 +999,7 @@ function resultForPoints(
   context: RoutingContext,
   points: readonly PixelPoint[],
   warnings: readonly string[],
-  usedFallback: boolean
+  usedFallback: boolean,
 ): RoadRouteResult {
   const safe = sanitizeBoundedPolyline(points).points;
   const analysis = analyzeTraversal(context, safe);
@@ -1033,7 +1021,7 @@ function fallbackGuide(
   from: PixelPoint,
   to: PixelPoint,
   guidePoints: readonly PixelPoint[],
-  toleranceCells: number
+  toleranceCells: number,
 ): PixelPoint[] {
   const sanitized = sanitizeBoundedPolyline([from, ...guidePoints, to]).points;
   let guide = simplifyInGridSpace(sanitized, width, height, toleranceCells);
@@ -1049,7 +1037,7 @@ function fallbackWithoutContext(
   from: PixelPoint,
   to: PixelPoint,
   guidePoints: readonly PixelPoint[],
-  warnings: readonly string[]
+  warnings: readonly string[],
 ): RoadRouteResult {
   const points = sanitizeBoundedPolyline([from, ...guidePoints, to]).points;
   return {
@@ -1074,7 +1062,7 @@ export function routeRoad(
   map: MapStateExtended,
   from: PixelPoint | NetworkAnchor,
   to: PixelPoint | NetworkAnchor,
-  options?: RoadRoutingOptions
+  options?: RoadRoutingOptions,
 ): RoadRouteResult {
   const safeFrom = sanitizePoint(from);
   const safeTo = sanitizePoint(to);
@@ -1095,7 +1083,7 @@ export function routeRoad(
       safeFrom.point,
       safeTo.point,
       options?.guidePoints ?? [],
-      warnings
+      warnings,
     );
   }
 
@@ -1104,7 +1092,7 @@ export function routeRoad(
   if (!outcome.points) {
     if (outcome.warning) warnings.push(outcome.warning);
     warnings.push(
-      "No terrain-safe route was found; the normalized guide is returned only for manual review."
+      "No terrain-safe route was found; the normalized guide is returned only for manual review.",
     );
     const guide = fallbackGuide(
       context.width,
@@ -1112,7 +1100,7 @@ export function routeRoad(
       safeFrom.point,
       safeTo.point,
       context.options.guidePoints,
-      context.options.freehandSimplifyToleranceCells
+      context.options.freehandSimplifyToleranceCells,
     );
     return resultForPoints(context, guide, warnings, true);
   }
@@ -1120,7 +1108,7 @@ export function routeRoad(
   const normalized = normalizeRoutedPolyline(
     context,
     outcome.points,
-    Math.min(0.32, context.options.freehandSimplifyToleranceCells)
+    Math.min(0.32, context.options.freehandSimplifyToleranceCells),
   );
   return resultForPoints(context, normalized, warnings, false);
 }
@@ -1134,7 +1122,7 @@ export function routeRoad(
 export function normalizeFreehandRoad(
   map: MapStateExtended,
   rawPoints: readonly PixelPoint[],
-  options?: RoadRoutingOptions
+  options?: RoadRoutingOptions,
 ): RoadRouteResult {
   const sanitized = sanitizeBoundedPolyline(rawPoints);
   const setup = createRoutingContext(map, options);
@@ -1153,7 +1141,7 @@ export function normalizeFreehandRoad(
       sanitized.points[0],
       sanitized.points[sanitized.points.length - 1],
       sanitized.points.slice(1, -1),
-      warnings
+      warnings,
     );
   }
 
@@ -1162,25 +1150,24 @@ export function normalizeFreehandRoad(
     sanitized.points,
     context.width,
     context.height,
-    context.options.freehandSimplifyToleranceCells
+    context.options.freehandSimplifyToleranceCells,
   );
   let anchors = sampleInGridSpace(
     simplifiedStroke,
     context.width,
     context.height,
-    context.options.freehandSampleSpacingCells
+    context.options.freehandSampleSpacingCells,
   );
   if (anchors.length > MAX_FREEHAND_ANCHORS) {
-    const totalLength = polylineDistanceCells(
-      simplifiedStroke,
-      context.width,
-      context.height
-    );
+    const totalLength = polylineDistanceCells(simplifiedStroke, context.width, context.height);
     anchors = sampleInGridSpace(
       simplifiedStroke,
       context.width,
       context.height,
-      Math.max(context.options.freehandSampleSpacingCells, totalLength / (MAX_FREEHAND_ANCHORS - 1))
+      Math.max(
+        context.options.freehandSampleSpacingCells,
+        totalLength / (MAX_FREEHAND_ANCHORS - 1),
+      ),
     );
     warnings.push("The stroke was downsampled to keep road generation responsive.");
   }
@@ -1199,10 +1186,13 @@ export function normalizeFreehandRoad(
     if (outcome.points) {
       segment = outcome.points;
     } else {
+      // Preserve the explicit fallback state for this legacy result path even
+      // though the function returns immediately below.
+      // eslint-disable-next-line no-useless-assignment
       usedFallback = true;
       if (outcome.warning) warnings.push(outcome.warning);
       warnings.push(
-        "A stroke section could not be terrain-routed; the guide is returned only for manual review."
+        "A stroke section could not be terrain-routed; the guide is returned only for manual review.",
       );
       // The editor never commits fallback geometry. Stop after the first failed
       // section instead of spending the remaining search budget on a result the
@@ -1217,7 +1207,7 @@ export function normalizeFreehandRoad(
   const normalized = normalizeRoutedPolyline(
     context,
     routed,
-    context.options.freehandSimplifyToleranceCells
+    context.options.freehandSimplifyToleranceCells,
   );
   normalized[0] = { ...sanitized.points[0] };
   normalized[normalized.length - 1] = { ...sanitized.points[sanitized.points.length - 1] };

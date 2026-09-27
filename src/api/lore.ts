@@ -25,7 +25,7 @@ export async function listLoreBooks(worldId: string): Promise<LoreBook[]> {
 export async function createLoreBook(
   worldId: string,
   title: string,
-  summary: string
+  summary: string,
 ): Promise<LoreBook> {
   return await invokeOrThrow<LoreBook>("create_lore_book", {
     worldId,
@@ -37,7 +37,7 @@ export async function createLoreBook(
 export async function updateLoreBook(
   id: string,
   title: string,
-  summary: string
+  summary: string,
 ): Promise<LoreBook> {
   return await invokeOrThrow<LoreBook>("update_lore_book", { id, title, summary });
 }
@@ -55,7 +55,7 @@ export async function listLoreEntries(bookId: string): Promise<LoreEntry[]> {
 export async function createLoreEntry(
   bookId: string,
   title: string,
-  content: string
+  content: string,
 ): Promise<LoreEntry> {
   return await invokeOrThrow<LoreEntry>("create_lore_entry", {
     bookId,
@@ -67,7 +67,7 @@ export async function createLoreEntry(
 export async function updateLoreEntry(
   id: string,
   title: string,
-  content: string
+  content: string,
 ): Promise<LoreEntry> {
   return await invokeOrThrow<LoreEntry>("update_lore_entry", { id, title, content });
 }

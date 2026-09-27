@@ -158,23 +158,20 @@ export const createDefaultWorldSetup = (): WorldSetupTemplates => ({
     },
   ],
   item: [{ id: makeId(), name: "Common Item", fields: buildDefaultFields("item") }],
-  ability: [
-    { id: makeId(), name: "Signature Ability", fields: buildDefaultFields("ability") },
-  ],
-  customEntities: [
-    { id: makeId(), name: "Faction", fields: buildDefaultFields("customEntities") },
-  ],
+  ability: [{ id: makeId(), name: "Signature Ability", fields: buildDefaultFields("ability") }],
+  customEntities: [{ id: makeId(), name: "Faction", fields: buildDefaultFields("customEntities") }],
 });
 
-export const getSectionCount = (
-  templates: WorldSetupTemplates,
-  section: WorldSetupSection
-) => templates[section].length;
+export const getSectionCount = (templates: WorldSetupTemplates, section: WorldSetupSection) =>
+  templates[section].length;
 
 const utf8Length = (value: string) => new TextEncoder().encode(value).length;
 const containsControlCharacter = (value: string) => /\p{Cc}/u.test(value);
 
-export function validateWorldDetails(name: string, gameSystem: string): SetupValidationIssue | null {
+export function validateWorldDetails(
+  name: string,
+  gameSystem: string,
+): SetupValidationIssue | null {
   const trimmedName = name.trim();
   const trimmedSystem = gameSystem.trim();
   if (!trimmedName) {
@@ -223,13 +220,13 @@ const duplicateValues = (values: string[]) => {
 const setupIssue = (
   message: string,
   section: WorldSetupSection,
-  fieldId?: string
+  fieldId?: string,
 ): SetupValidationIssue => ({ message, step: "setup", section, fieldId });
 
 export function validateWorldSetup(
   name: string,
   gameSystem: string,
-  templates: WorldSetupTemplates
+  templates: WorldSetupTemplates,
 ): SetupValidationIssue | null {
   const detailsIssue = validateWorldDetails(name, gameSystem);
   if (detailsIssue) return detailsIssue;
@@ -237,8 +234,14 @@ export function validateWorldSetup(
   const allIds = [
     ...templates.character.map((feature) => feature.id),
     ...templates.npc.map((npc) => npc.id),
-    ...templates.item.flatMap((template) => [template.id, ...template.fields.map((field) => field.id)]),
-    ...templates.ability.flatMap((template) => [template.id, ...template.fields.map((field) => field.id)]),
+    ...templates.item.flatMap((template) => [
+      template.id,
+      ...template.fields.map((field) => field.id),
+    ]),
+    ...templates.ability.flatMap((template) => [
+      template.id,
+      ...template.fields.map((field) => field.id),
+    ]),
     ...templates.customEntities.flatMap((template) => [
       template.id,
       ...template.fields.map((field) => field.id),
@@ -247,14 +250,14 @@ export function validateWorldSetup(
   if (new Set(allIds).size !== allIds.length) {
     return setupIssue(
       "Two setup fields share an identifier. Remove and recreate the duplicated field.",
-      "character"
+      "character",
     );
   }
 
   if (templates.character.length > MAX_CHARACTER_FEATURES) {
     return setupIssue(
       `A character sheet can contain at most ${MAX_CHARACTER_FEATURES} starting fields.`,
-      "character"
+      "character",
     );
   }
 
@@ -265,7 +268,11 @@ export function validateWorldSetup(
     const label = feature.label.trim();
     if (!label) return setupIssue("Every character field needs a label.", "character", feature.id);
     if (label.length > 80) {
-      return setupIssue("Character field labels must be 80 characters or fewer.", "character", feature.id);
+      return setupIssue(
+        "Character field labels must be 80 characters or fewer.",
+        "character",
+        feature.id,
+      );
     }
     if (
       (feature.type === "number_stat" || feature.type === "number_resource") &&
@@ -280,7 +287,11 @@ export function validateWorldSetup(
       (feature.type === "number_stat" || feature.type === "number_resource") &&
       feature.min! > feature.max!
     ) {
-      return setupIssue(`“${label}” cannot have a minimum above its maximum.`, "character", feature.id);
+      return setupIssue(
+        `“${label}” cannot have a minimum above its maximum.`,
+        "character",
+        feature.id,
+      );
     }
     if (
       feature.type === "custom_entity" &&
@@ -290,7 +301,7 @@ export function validateWorldSetup(
       return setupIssue(
         `“${label}” must reference an existing custom entity template.`,
         "character",
-        feature.id
+        feature.id,
       );
     }
   }
@@ -301,7 +312,7 @@ export function validateWorldSetup(
   if (templates.npc.length > MAX_TEMPLATES_PER_SECTION) {
     return setupIssue(
       `A world can contain at most ${MAX_TEMPLATES_PER_SECTION} starter NPC templates.`,
-      "npc"
+      "npc",
     );
   }
   for (const npc of templates.npc) {
@@ -311,7 +322,11 @@ export function validateWorldSetup(
       return setupIssue("NPC template names must be 200 bytes or fewer.", "npc", npc.id);
     }
     if (containsControlCharacter(nameValue)) {
-      return setupIssue("NPC template names contain an unsupported control character.", "npc", npc.id);
+      return setupIssue(
+        "NPC template names contain an unsupported control character.",
+        "npc",
+        npc.id,
+      );
     }
     if (npc.role.trim().length > 300) {
       return setupIssue("NPC roles must be 300 characters or fewer.", "npc", npc.id);
@@ -333,7 +348,7 @@ export function validateWorldSetup(
     if (collection.length > MAX_TEMPLATES_PER_SECTION) {
       return setupIssue(
         `${collectionLabel} is limited to ${MAX_TEMPLATES_PER_SECTION} entries.`,
-        section
+        section,
       );
     }
     if (duplicateValues(collection.map((template) => template.name))) {
@@ -345,27 +360,39 @@ export function validateWorldSetup(
         return setupIssue(`${collectionLabel} requires a name.`, section, template.id);
       }
       if (utf8Length(nameValue) > 200) {
-        return setupIssue(`${collectionLabel} names must be 200 bytes or fewer.`, section, template.id);
+        return setupIssue(
+          `${collectionLabel} names must be 200 bytes or fewer.`,
+          section,
+          template.id,
+        );
       }
       if (containsControlCharacter(nameValue)) {
         return setupIssue(
           `${collectionLabel} names contain an unsupported control character.`,
           section,
-          template.id
+          template.id,
         );
       }
       if (template.fields.length === 0) {
-        return setupIssue(`${collectionLabel} must contain at least one field.`, section, template.id);
+        return setupIssue(
+          `${collectionLabel} must contain at least one field.`,
+          section,
+          template.id,
+        );
       }
       if (template.fields.length > MAX_FIELDS_PER_TEMPLATE) {
         return setupIssue(
           `“${nameValue}” can contain at most ${MAX_FIELDS_PER_TEMPLATE} fields.`,
           section,
-          template.id
+          template.id,
         );
       }
       if (duplicateValues(template.fields.map((field) => field.label))) {
-        return setupIssue(`Field labels inside “${nameValue}” must be unique.`, section, template.id);
+        return setupIssue(
+          `Field labels inside “${nameValue}” must be unique.`,
+          section,
+          template.id,
+        );
       }
       for (const field of template.fields) {
         if (!field.label.trim()) {
@@ -375,19 +402,18 @@ export function validateWorldSetup(
           return setupIssue(
             `Field labels inside “${nameValue}” must be 80 characters or fewer.`,
             section,
-            field.id
+            field.id,
           );
         }
       }
     }
   }
 
-
   const payload = buildTemplatePayload(templates);
   if (payload.length > MAX_TEMPLATES_PER_WORLD) {
     return setupIssue(
       `A world can contain at most ${MAX_TEMPLATES_PER_WORLD} templates.`,
-      "character"
+      "character",
     );
   }
   let totalDefinitionBytes = 0;
@@ -406,7 +432,7 @@ export function validateWorldSetup(
     if (definitionBytes > MAX_TEMPLATE_DEFINITION_BYTES) {
       return setupIssue(
         `“${template.name}” is too large. Reduce its fields or notes before creating the world.`,
-        section
+        section,
       );
     }
     totalDefinitionBytes += definitionBytes;
@@ -414,7 +440,7 @@ export function validateWorldSetup(
   if (totalDefinitionBytes > MAX_TOTAL_TEMPLATE_BYTES) {
     return setupIssue(
       "This starter setup is too large. Remove some templates, fields, or notes before creating the world.",
-      "character"
+      "character",
     );
   }
   return null;
@@ -423,7 +449,7 @@ export function validateWorldSetup(
 type KeyedTemplateDefinitionPayload = TemplateDefinitionPayload & { client_key: string };
 
 export function buildTemplatePayload(
-  templates: WorldSetupTemplates
+  templates: WorldSetupTemplates,
 ): KeyedTemplateDefinitionPayload[] {
   const payload: KeyedTemplateDefinitionPayload[] = [
     {

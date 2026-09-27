@@ -3,16 +3,13 @@ import { BIOME_TARGETS } from "./constants";
 import { pseudoRandom } from "./math";
 
 const LAND_BIOMES = Object.keys(BIOME_TARGETS).filter(
-  (biome) => !["ocean", "shallow", "reef", "beach", "mangrove", "wetland"].includes(biome)
+  (biome) => !["ocean", "shallow", "reef", "beach", "mangrove", "wetland"].includes(biome),
 ) as Biome[];
 
 export function stylizeColor(color: [number, number, number]) {
   const [r, g, b] = color;
   const tinted = [r * 0.9 + 20, g * 0.94 + 14, b * 0.88 + 24];
-  return `rgb(${Math.min(255, tinted[0])},${Math.min(255, tinted[1])},${Math.min(
-    255,
-    tinted[2]
-  )})`;
+  return `rgb(${Math.min(255, tinted[0])},${Math.min(255, tinted[1])},${Math.min(255, tinted[2])})`;
 }
 
 export function computeBiome(map: MapStateExtended, idx: number): Biome {
@@ -74,7 +71,7 @@ export function extractBiomeLoops(
   biomeGrid: Biome[],
   width: number,
   height: number,
-  target: Biome
+  target: Biome,
 ): Array<Array<[number, number]>> {
   type Edge = [[number, number], [number, number]];
   const edges: Edge[] = [];
@@ -83,16 +80,28 @@ export function extractBiomeLoops(
     for (let x = 0; x < width; x += 1) {
       if (biomeGrid[idxFor(x, y)] !== target) continue;
       if (y === 0 || biomeGrid[idxFor(x, y - 1)] !== target) {
-        edges.push([[x, y], [x + 1, y]]);
+        edges.push([
+          [x, y],
+          [x + 1, y],
+        ]);
       }
       if (x === width - 1 || biomeGrid[idxFor(x + 1, y)] !== target) {
-        edges.push([[x + 1, y], [x + 1, y + 1]]);
+        edges.push([
+          [x + 1, y],
+          [x + 1, y + 1],
+        ]);
       }
       if (y === height - 1 || biomeGrid[idxFor(x, y + 1)] !== target) {
-        edges.push([[x + 1, y + 1], [x, y + 1]]);
+        edges.push([
+          [x + 1, y + 1],
+          [x, y + 1],
+        ]);
       }
       if (x === 0 || biomeGrid[idxFor(x - 1, y)] !== target) {
-        edges.push([[x, y + 1], [x, y]]);
+        edges.push([
+          [x, y + 1],
+          [x, y],
+        ]);
       }
     }
   }
@@ -144,7 +153,7 @@ export function buildSmoothPath(
   loop: Array<[number, number]>,
   cellSize: number,
   jitterScale: number,
-  seed: number
+  seed: number,
 ): Path2D {
   const normalizedLoop =
     loop.length > 1 &&
