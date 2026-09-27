@@ -291,6 +291,17 @@ pub struct CityEntrance {
     pub road_class: String,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CityTerrainContext {
+    pub coastal: bool,
+    #[serde(default)]
+    pub coast_angle: Option<f64>,
+    pub elevation: f64,
+    pub moisture: f64,
+    pub temperature: f64,
+    pub vegetation: f64,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct CityMap {
     #[serde(default = "default_city_schema_version")]
@@ -314,6 +325,8 @@ pub struct CityMap {
     pub external_connections: Vec<f64>,
     #[serde(default)]
     pub entrances: Vec<CityEntrance>,
+    #[serde(default)]
+    pub terrain: Option<CityTerrainContext>,
     #[serde(default)]
     pub districts: Vec<CityDistrict>,
     pub roads: Vec<CityRoad>,
@@ -400,6 +413,18 @@ impl CityMap {
             if !matches!(entrance.road_class.as_str(), "arterial" | "road") {
                 return Err("Unsupported city entrance road class".into());
             }
+        }
+        if let Some(terrain) = &self.terrain {
+            if terrain
+                .coast_angle
+                .is_some_and(|angle| !angle.is_finite() || angle.abs() > std::f64::consts::TAU)
+            {
+                return Err("City coast angle must be finite radians".into());
+            }
+            validate_unit_value(terrain.elevation, "City terrain elevation")?;
+            validate_unit_value(terrain.moisture, "City terrain moisture")?;
+            validate_unit_value(terrain.temperature, "City terrain temperature")?;
+            validate_unit_value(terrain.vegetation, "City terrain vegetation")?;
         }
         if self.districts.len() > 100 {
             return Err("A city map can contain at most 100 districts".into());
@@ -786,6 +811,7 @@ mod tests {
             road_theme: "fantasy".into(),
             external_connections: vec![0.0],
             entrances: vec![],
+            terrain: None,
             districts: vec![],
             roads: vec![CityRoad {
                 id: "road-1".into(),

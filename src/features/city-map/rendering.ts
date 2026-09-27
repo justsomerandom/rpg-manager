@@ -541,6 +541,72 @@ function drawGround(
   context.stroke();
 }
 
+function drawTerrainContext(
+  context: CanvasRenderingContext2D,
+  map: CityMap,
+  transform: ViewTransform,
+): void {
+  const terrain = map.terrain;
+  if (!terrain) return;
+
+  const vegetation = clamp(finite(terrain.vegetation, 0.5), 0, 1);
+  const moisture = clamp(finite(terrain.moisture, 0.5), 0, 1);
+  const elevation = clamp(finite(terrain.elevation, 0.5), 0, 1);
+  const boundary = mapBoundary(transform);
+  polygonPath(context, boundary);
+  context.fillStyle = `rgba(${Math.round(85 - elevation * 22)}, ${Math.round(
+    112 + vegetation * 38,
+  )}, ${Math.round(78 + moisture * 28)}, ${0.035 + vegetation * 0.075})`;
+  context.fill();
+
+  if (!terrain.coastal || !Number.isFinite(terrain.coast_angle)) return;
+  const angle = terrain.coast_angle!;
+  const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+  const perpendicular = { x: -direction.y, y: direction.x };
+  const coastCentre = { x: 0.5 + direction.x * 0.36, y: 0.5 + direction.y * 0.36 };
+  const coastline = Array.from({ length: 25 }, (_, index) => {
+    const amount = index / 24;
+    const across = (amount - 0.5) * 1.55;
+    const wave = Math.sin(amount * Math.PI * 5 + map.seed * 0.001) * 0.012;
+    return {
+      x: coastCentre.x + perpendicular.x * across + direction.x * wave,
+      y: coastCentre.y + perpendicular.y * across + direction.y * wave,
+    };
+  });
+  const waterPolygon = [
+    ...coastline,
+    {
+      x: coastline[coastline.length - 1]!.x + direction.x * 1.5,
+      y: coastline[coastline.length - 1]!.y + direction.y * 1.5,
+    },
+    {
+      x: coastline[0]!.x + direction.x * 1.5,
+      y: coastline[0]!.y + direction.y * 1.5,
+    },
+  ].map((point) => cityToScreen(point, transform));
+  polygonPath(context, waterPolygon);
+  const waterWash = context.createLinearGradient(
+    waterPolygon[0]!.x,
+    waterPolygon[0]!.y,
+    waterPolygon[waterPolygon.length - 2]!.x,
+    waterPolygon[waterPolygon.length - 2]!.y,
+  );
+  waterWash.addColorStop(0, "rgba(69, 111, 117, 0.72)");
+  waterWash.addColorStop(1, "rgba(35, 76, 86, 0.9)");
+  context.fillStyle = waterWash;
+  context.fill();
+
+  const projectedCoast = coastline.map((point) => cityToScreen(point, transform));
+  linePath(context, projectedCoast);
+  context.strokeStyle = "rgba(238, 222, 181, 0.82)";
+  context.lineWidth = 2.2;
+  context.stroke();
+  linePath(context, projectedCoast);
+  context.strokeStyle = "rgba(48, 84, 88, 0.6)";
+  context.lineWidth = 0.8;
+  context.stroke();
+}
+
 function districtBaseColor(district: CityDistrict): string {
   const kindColor = DISTRICT_COLORS[district.kind] ?? DISTRICT_COLORS.mixed;
   const savedColor = /^#[0-9a-f]{6}$/i.test(district.color) ? district.color : kindColor;
@@ -1278,6 +1344,7 @@ export function drawCityMap(
   context.save();
   polygonPath(context, boundary);
   context.clip();
+  if (layers.ground) drawTerrainContext(context, map, transform);
   if (layers.districts) renderedDistricts = drawDistricts(context, map, transform, labels);
   if (layers.roads) renderedRoads = drawRoads(context, map, transform, labels);
   if (layers.buildings) {

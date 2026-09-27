@@ -25,6 +25,15 @@ export type CityEntrance = {
   road_class: "arterial" | "road";
 };
 
+export type CityTerrainContext = {
+  coastal: boolean;
+  coast_angle?: number | null;
+  elevation: number;
+  moisture: number;
+  temperature: number;
+  vegetation: number;
+};
+
 export type CityRoad = {
   id: string;
   name: string;
@@ -91,6 +100,7 @@ export type CityMap = {
     | "cyberpunk";
   external_connections?: number[];
   entrances?: CityEntrance[];
+  terrain?: CityTerrainContext | null;
   districts?: CityDistrict[];
   roads: CityRoad[];
   buildings: CityBuilding[];
@@ -165,6 +175,21 @@ function finiteNumber(value: unknown, fallback: number) {
 
 function safeText(value: unknown, fallback: string, maxLength = 120) {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, maxLength) : fallback;
+}
+
+function normalizeTerrain(value: CityMap["terrain"]): CityTerrainContext | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const coastAngle = Number.isFinite(value.coast_angle)
+    ? Math.atan2(Math.sin(value.coast_angle!), Math.cos(value.coast_angle!))
+    : undefined;
+  return {
+    coastal: Boolean(value.coastal),
+    coast_angle: coastAngle,
+    elevation: clamp(finiteNumber(value.elevation, 0.5)),
+    moisture: clamp(finiteNumber(value.moisture, 0.5)),
+    temperature: clamp(finiteNumber(value.temperature, 0.5)),
+    vegetation: clamp(finiteNumber(value.vegetation, 0.5)),
+  };
 }
 
 export function normalizeCityMap(raw: CityMap, cityId: string): CityMap {
@@ -374,6 +399,7 @@ export function normalizeCityMap(raw: CityMap, cityId: string): CityMap {
     road_theme: theme,
     external_connections: externalConnections,
     entrances,
+    terrain: normalizeTerrain(map.terrain),
     districts,
     roads: roads.map((road) => ({
       ...road,

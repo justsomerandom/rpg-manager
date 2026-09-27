@@ -2,6 +2,7 @@
 import type { PointerEvent as ReactPointerEvent, WheelEvent } from "react";
 import { useBlocker, useParams } from "react-router-dom";
 import { getWorldMap, saveWorldMap, type MapCity, type MapLocationKind } from "../../api/worldMap";
+import type { CityTerrainContext } from "../../api/cityMap";
 import { getErrorMessage } from "../../api/client";
 import { CityMapEditor, type CityMapApproach } from "../../components/CityMapEditor";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
@@ -57,6 +58,46 @@ import { normalizeFreehandRoad, routeRoad, type RoadRouteResult } from "./map/ro
 
 const iconCache = new Map<string, Promise<HTMLImageElement>>();
 const MAX_COMPILED_PIXELS = 12_000_000;
+
+function terrainContextForCity(map: MapStateExtended, city: MapCity): CityTerrainContext {
+  const cellX = Math.max(0, Math.min(map.width - 1, Math.floor(city.x * map.width)));
+  const cellY = Math.max(0, Math.min(map.height - 1, Math.floor(city.y * map.height)));
+  const index = cellY * map.width + cellX;
+  const searchRadius = Math.min(
+    14,
+    Math.max(4, Math.ceil(Math.min(map.width, map.height) * 0.045)),
+  );
+  let coastX = 0;
+  let coastY = 0;
+  let waterWeight = 0;
+
+  for (let offsetY = -searchRadius; offsetY <= searchRadius; offsetY += 1) {
+    const y = cellY + offsetY;
+    if (y < 0 || y >= map.height) continue;
+    for (let offsetX = -searchRadius; offsetX <= searchRadius; offsetX += 1) {
+      const x = cellX + offsetX;
+      if (x < 0 || x >= map.width || (offsetX === 0 && offsetY === 0)) continue;
+      const distanceSquared = offsetX * offsetX + offsetY * offsetY;
+      if (distanceSquared > searchRadius * searchRadius) continue;
+      const sampleIndex = y * map.width + x;
+      if ((map.relief[sampleIndex] ?? 1) > map.water_level) continue;
+      const weight = 1 / Math.max(1, distanceSquared);
+      coastX += offsetX * weight;
+      coastY += offsetY * weight;
+      waterWeight += weight;
+    }
+  }
+
+  const coastal = waterWeight > 0.06;
+  return {
+    coastal,
+    coast_angle: coastal ? Math.atan2(coastY, coastX) : undefined,
+    elevation: clamp(map.relief[index] ?? city.elevation ?? 0.5, 0, 1),
+    moisture: clamp(map.moisture[index] ?? 0.5, 0, 1),
+    temperature: clamp(map.temperature[index] ?? 0.5, 0, 1),
+    vegetation: clamp(map.vegetation[index] ?? 0.5, 0, 1),
+  };
+}
 
 type MapConfirmation =
   | { kind: "regenerate" }
@@ -1395,6 +1436,11 @@ export function WorldMapPage() {
       return [];
     });
   }, [mapState, cityEditorCity]);
+  const cityEnvironment = useMemo(
+    () =>
+      mapState && cityEditorCity ? terrainContextForCity(mapState, cityEditorCity) : undefined,
+    [mapState, cityEditorCity],
+  );
 
   const generateMap = () => {
     if (mapState) rememberSnapshot(mapState);
@@ -2983,6 +3029,7 @@ export function WorldMapPage() {
           worldId={worldId}
           city={cityEditorCity}
           externalConnections={cityExternalConnections}
+          environment={cityEnvironment}
           onDirtyChange={setCityEditorDirty}
           onSavingChange={setCityEditorSaving}
           onClose={() => {

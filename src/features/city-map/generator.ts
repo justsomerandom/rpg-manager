@@ -5,6 +5,7 @@ import type {
   CityMap,
   CityRoad,
   CitySize,
+  CityTerrainContext,
   CityType,
 } from "../../api/cityMap";
 import type { MapCity } from "../../api/worldMap";
@@ -160,6 +161,34 @@ export function deriveRecommendedCitySize(population: number): CitySize {
   return "megapolis";
 }
 
+export function recommendedCityLayout(cityType: CityType): CityLayout {
+  switch (cityType) {
+    case "capital":
+      return "radial";
+    case "trade":
+    case "industrial":
+      return "grid";
+    case "fortress":
+      return "ring";
+    case "port":
+    case "rural":
+      return "organic";
+  }
+}
+
+export function recommendedLandmarkCount(size: CitySize, cityType: CityType): number {
+  const baseline: Record<CitySize, number> = { village: 1, town: 2, city: 4, megapolis: 7 };
+  const modifier: Record<CityType, number> = {
+    capital: 2,
+    trade: 1,
+    port: 1,
+    fortress: 1,
+    industrial: 0,
+    rural: -1,
+  };
+  return Math.max(0, baseline[size] + modifier[cityType]);
+}
+
 export function stableCityFeatureId(
   cityId: string,
   seed: number,
@@ -180,6 +209,13 @@ type RoadDraft = {
   tier: 1 | 2 | 3 | 4 | 5;
   externalConnectionIndex?: number;
   points: Point[];
+};
+
+type RoadSegmentDraft = {
+  roadIndex: number;
+  segmentIndex: number;
+  a: Point;
+  b: Point;
 };
 
 type GeneratedDistrict = CityDistrict & {
@@ -314,6 +350,18 @@ function roadTier(importance: RoadImportance, size: CitySize): 1 | 2 | 3 | 4 | 5
   return SIZE_ORDER[size] >= 2 ? 5 : 4;
 }
 
+function typeAdjustedCount(base: number, cityType: CityType): number {
+  const multiplier: Record<CityType, number> = {
+    capital: 1.18,
+    trade: 1.08,
+    port: 1,
+    fortress: 0.92,
+    industrial: 1.12,
+    rural: 0.72,
+  };
+  return Math.max(3, Math.round(base * multiplier[cityType]));
+}
+
 function makeRoadNetwork(
   cityId: string,
   size: CitySize,
@@ -322,6 +370,7 @@ function makeRoadNetwork(
   seed: number,
   boundary: EllipseBoundary,
   entranceAngles: readonly number[],
+  terrain?: CityTerrainContext,
 ): RoadDraft[] {
   const rng = new SeededRandom(hashParts(seed, cityId, "roads", layout, cityType));
   const roads: RoadDraft[] = [];
@@ -351,7 +400,7 @@ function makeRoadNetwork(
   const level = SIZE_ORDER[size];
 
   if (layout === "grid") {
-    const lineCount = [5, 7, 10, 13][level]!;
+    const lineCount = typeAdjustedCount([5, 7, 10, 13][level]!, cityType);
     const rotation = rng.range(-0.075, 0.075);
     const cosine = Math.cos(rotation);
     const sine = Math.sin(rotation);
@@ -377,7 +426,7 @@ function makeRoadNetwork(
       ]);
     }
   } else if (layout === "radial") {
-    const spokeCount = [6, 8, 11, 14][level]!;
+    const spokeCount = typeAdjustedCount([6, 8, 11, 14][level]!, cityType);
     const startAngle = rng.range(-Math.PI, Math.PI);
     for (let index = 0; index < spokeCount; index += 1) {
       const angle = startAngle + (index / spokeCount) * TAU;
@@ -386,7 +435,7 @@ function makeRoadNetwork(
       const middle = pointOnEllipse(boundary, angle + rng.range(-0.035, 0.035), 0.5);
       addRoad(importance, [center, middle, pointOnEllipse(boundary, angle, 0.94)]);
     }
-    const ringCount = [2, 3, 4, 5][level]!;
+    const ringCount = Math.max(2, typeAdjustedCount([2, 3, 4, 5][level]!, cityType));
     for (let ring = 1; ring <= ringCount; ring += 1) {
       const scale = (ring / (ringCount + 1)) * 0.91;
       const samples = Math.max(18, spokeCount * 2);
@@ -396,8 +445,8 @@ function makeRoadNetwork(
       addRoad(ring === ringCount ? "main" : ring % 2 === 0 ? "secondary" : "alley", points);
     }
   } else if (layout === "ring") {
-    const ringCount = [2, 3, 5, 6][level]!;
-    const spokeCount = [4, 6, 8, 10][level]!;
+    const ringCount = Math.max(2, typeAdjustedCount([2, 3, 5, 6][level]!, cityType));
+    const spokeCount = typeAdjustedCount([4, 6, 8, 10][level]!, cityType);
     const startAngle = rng.range(-Math.PI, Math.PI);
     for (let ring = 1; ring <= ringCount; ring += 1) {
       const scale = (ring / ringCount) * 0.91;
@@ -418,7 +467,7 @@ function makeRoadNetwork(
       ]);
     }
   } else {
-    const arterialCount = [4, 6, 8, 10][level]!;
+    const arterialCount = typeAdjustedCount([4, 6, 8, 10][level]!, cityType);
     const startAngle = rng.range(-Math.PI, Math.PI);
     const arterialAngles: number[] = [];
     const arterialPaths: Point[][] = [];
@@ -434,7 +483,10 @@ function makeRoadNetwork(
       arterialPaths.push(smoothed);
       addRoad(index % 3 === 0 ? "main" : "secondary", smoothed);
     }
-    const branchLayers = [1, 2, 3, 4][level]!;
+    const branchLayers = Math.max(
+      1,
+      Math.round([1, 2, 3, 4][level]! * (cityType === "rural" ? 0.7 : 1)),
+    );
     for (let layer = 0; layer < branchLayers; layer += 1) {
       const scale = 0.3 + layer * (0.54 / Math.max(1, branchLayers - 1));
       for (let index = 0; index < arterialAngles.length; index += 1) {
@@ -462,6 +514,60 @@ function makeRoadNetwork(
     }
   }
 
+  // Each settlement type gets a recognizable structural layer regardless of the selected layout.
+  if (cityType === "capital") {
+    addRoad("main", [
+      pointOnEllipse(boundary, Math.PI, 0.94),
+      center,
+      pointOnEllipse(boundary, 0, 0.94),
+    ]);
+    addRoad("main", [
+      pointOnEllipse(boundary, -Math.PI / 2, 0.94),
+      center,
+      pointOnEllipse(boundary, Math.PI / 2, 0.94),
+    ]);
+  } else if (cityType === "trade") {
+    const marketRing = Array.from({ length: 25 }, (_, index) =>
+      pointOnEllipse(boundary, (index / 24) * TAU, 0.3),
+    );
+    addRoad("main", marketRing);
+  } else if (cityType === "fortress") {
+    const defensiveRing = Array.from({ length: 37 }, (_, index) =>
+      pointOnEllipse(boundary, (index / 36) * TAU, 0.96),
+    );
+    addRoad("main", defensiveRing);
+  } else if (cityType === "industrial") {
+    const freightAngle = rng.range(-0.16, 0.16);
+    for (const offset of [-0.22, 0, 0.22]) {
+      const perpendicular = freightAngle + Math.PI / 2;
+      const origin = {
+        x: center.x + Math.cos(perpendicular) * boundary.radiusX * offset,
+        y: center.y + Math.sin(perpendicular) * boundary.radiusY * offset,
+      };
+      const span = Math.max(boundary.radiusX, boundary.radiusY) * 0.9;
+      addRoad(offset === 0 ? "main" : "secondary", [
+        {
+          x: origin.x - Math.cos(freightAngle) * span,
+          y: origin.y - Math.sin(freightAngle) * span,
+        },
+        {
+          x: origin.x + Math.cos(freightAngle) * span,
+          y: origin.y + Math.sin(freightAngle) * span,
+        },
+      ]);
+    }
+  } else if (cityType === "port") {
+    const coastAngle =
+      terrain?.coastal && Number.isFinite(terrain.coast_angle)
+        ? terrain.coast_angle!
+        : (entranceAngles[0] ?? -Math.PI / 2);
+    const waterfront = Array.from({ length: 17 }, (_, index) =>
+      pointOnEllipse(boundary, coastAngle - Math.PI * 0.52 + (index / 16) * Math.PI * 1.04, 0.82),
+    );
+    addRoad("main", waterfront);
+    addRoad("main", [pointOnEllipse(boundary, coastAngle, 0.94), center]);
+  }
+
   entranceAngles.forEach((angle, entranceIndex) => {
     const outer = pointOnEllipse(boundary, angle, 0.995);
     const approach = pointOnEllipse(boundary, angle + rng.range(-0.035, 0.035), 0.72);
@@ -470,6 +576,90 @@ function makeRoadNetwork(
   });
 
   return roads;
+}
+
+function segmentIntersection(
+  a: Point,
+  b: Point,
+  c: Point,
+  d: Point,
+): { point: Point; firstAmount: number; secondAmount: number } | null {
+  const abX = b.x - a.x;
+  const abY = b.y - a.y;
+  const cdX = d.x - c.x;
+  const cdY = d.y - c.y;
+  const denominator = abX * cdY - abY * cdX;
+  if (Math.abs(denominator) < 1e-10) return null;
+  const acX = c.x - a.x;
+  const acY = c.y - a.y;
+  const firstAmount = (acX * cdY - acY * cdX) / denominator;
+  const secondAmount = (acX * abY - acY * abX) / denominator;
+  const epsilon = 1e-7;
+  if (
+    firstAmount < -epsilon ||
+    firstAmount > 1 + epsilon ||
+    secondAmount < -epsilon ||
+    secondAmount > 1 + epsilon
+  ) {
+    return null;
+  }
+  const x = Math.round((a.x + abX * clamp(firstAmount)) * 1_000_000) / 1_000_000;
+  const y = Math.round((a.y + abY * clamp(firstAmount)) * 1_000_000) / 1_000_000;
+  return {
+    point: { x, y },
+    firstAmount: clamp(firstAmount),
+    secondAmount: clamp(secondAmount),
+  };
+}
+
+/** Inserts identical nodes into every road that crosses another road. */
+export function planarizeRoadNetwork(roads: readonly RoadDraft[]): RoadDraft[] {
+  const index = new SpatialHash<RoadSegmentDraft>(0.045);
+  const splits = roads.map((road) =>
+    road.points.slice(0, -1).map(() => [] as Array<{ amount: number; point: Point }>),
+  );
+
+  roads.forEach((road, roadIndex) => {
+    for (let segmentIndex = 0; segmentIndex < road.points.length - 1; segmentIndex += 1) {
+      const a = road.points[segmentIndex]!;
+      const b = road.points[segmentIndex + 1]!;
+      const segment: RoadSegmentDraft = { roadIndex, segmentIndex, a, b };
+      const bounds = segmentBounds(a, b, 0.000001);
+      for (const other of index.query(bounds)) {
+        if (other.roadIndex === roadIndex) continue;
+        const intersection = segmentIntersection(a, b, other.a, other.b);
+        if (!intersection) continue;
+        splits[roadIndex]![segmentIndex]!.push({
+          amount: intersection.firstAmount,
+          point: intersection.point,
+        });
+        splits[other.roadIndex]![other.segmentIndex]!.push({
+          amount: intersection.secondAmount,
+          point: intersection.point,
+        });
+      }
+      index.insert(segment, bounds);
+    }
+  });
+
+  return roads.map((road, roadIndex) => {
+    const points: Point[] = [];
+    for (let segmentIndex = 0; segmentIndex < road.points.length - 1; segmentIndex += 1) {
+      const a = road.points[segmentIndex]!;
+      const b = road.points[segmentIndex + 1]!;
+      const candidates = [
+        { amount: 0, point: a },
+        ...splits[roadIndex]![segmentIndex]!,
+        { amount: 1, point: b },
+      ].sort((left, right) => left.amount - right.amount);
+      for (const candidate of candidates) {
+        const previous = points[points.length - 1];
+        if (!previous || distance(previous, candidate.point) > 0.000001)
+          points.push(candidate.point);
+      }
+    }
+    return { ...road, points };
+  });
 }
 
 type WeightedKind = readonly [DistrictKind, number];
@@ -562,6 +752,7 @@ function makeDistricts(
   seed: number,
   boundary: EllipseBoundary,
   entranceAngles: readonly number[],
+  terrain?: CityTerrainContext,
 ): GeneratedDistrict[] {
   const rng = new SeededRandom(hashParts(seed, cityId, "districts", cityType));
   const totalCount = [4, 7, 10, 14][SIZE_ORDER[size]]!;
@@ -605,7 +796,10 @@ function makeDistricts(
 
   const outerCount = totalCount - 1;
   const originAngle = rng.range(-Math.PI, Math.PI);
-  const harborAngle = entranceAngles[0] ?? originAngle;
+  const harborAngle =
+    terrain?.coastal && Number.isFinite(terrain.coast_angle)
+      ? terrain.coast_angle!
+      : (entranceAngles[0] ?? originAngle);
   let harborAssigned = cityType !== "port";
   for (let index = 0; index < outerCount; index += 1) {
     const startAngle = originAngle + (index / outerCount) * TAU + 0.009;
@@ -753,9 +947,11 @@ function chooseBuildingKind(
 ): BuildingKind {
   const base = BUILDING_WEIGHTS[districtKind];
   const modifiers = TYPE_BUILDING_MODIFIERS[cityType];
-  const entries = (Object.keys(base) as BuildingKind[]).map(
-    (kind) => [kind, base[kind] * (modifiers[kind] ?? 1)] as const,
-  );
+  // Landmarks are deliberate campaign content. Generation reserves a recommendation but never
+  // invents named locations that a game master did not choose.
+  const entries = (Object.keys(base) as BuildingKind[])
+    .filter((kind) => kind !== "landmark")
+    .map((kind) => [kind, base[kind] * (modifiers[kind] ?? 1)] as const);
   const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
   let cursor = rng.range(0, total);
   for (const [kind, weight] of entries) {
@@ -877,6 +1073,7 @@ function makeBuildings(
   roads: readonly RoadDraft[],
   districts: readonly GeneratedDistrict[],
   lockedBuildings: readonly CityBuilding[],
+  terrain?: CityTerrainContext,
 ): CityBuilding[] {
   const rng = new SeededRandom(
     hashParts(seed, cityId, "buildings", size, cityType, density, scale),
@@ -929,6 +1126,13 @@ function makeBuildings(
       height: dimensions.height,
       rotation: tangentAngle + rng.range(-0.065, 0.065),
     };
+    if (terrain?.coastal && Number.isFinite(terrain.coast_angle)) {
+      const coastX = Math.cos(terrain.coast_angle!);
+      const coastY = Math.sin(terrain.coast_angle!);
+      const normalizedX = (rectangle.x - boundary.x) / boundary.radiusX;
+      const normalizedY = (rectangle.y - boundary.y) / boundary.radiusY;
+      if (normalizedX * coastX + normalizedY * coastY > 0.82) continue;
+    }
     if (!rectangleInsideEllipse(rectangle, boundary, 0.005)) continue;
     if (!polygonContainsPoint({ x: rectangle.x, y: rectangle.y }, district.points)) continue;
     if (!clearsRoads(rectangle, roadIndex)) continue;
@@ -990,20 +1194,24 @@ export function generateCityPlan(
   config: CityGenerationConfig,
   existingLockedBuildings: readonly CityBuilding[] = [],
   entrances: readonly number[] = [],
+  terrain?: CityTerrainContext,
 ): CityMap {
   const seed = normalizedSeed(config.seed);
   const density = clamp(finiteOr(config.density, 1), 0.55, 1.4);
   const scale = clamp(finiteOr(config.scale, 1), 0.75, 1.3);
   const connections = normalizedEntrances(entrances);
   const boundary = cityBoundary(config.size, scale, config.cityType);
-  const roadDrafts = makeRoadNetwork(
-    city.id,
-    config.size,
-    config.layout,
-    config.cityType,
-    seed,
-    boundary,
-    connections,
+  const roadDrafts = planarizeRoadNetwork(
+    makeRoadNetwork(
+      city.id,
+      config.size,
+      config.layout,
+      config.cityType,
+      seed,
+      boundary,
+      connections,
+      terrain,
+    ),
   );
   const districts = makeDistricts(
     city.id,
@@ -1012,6 +1220,7 @@ export function generateCityPlan(
     seed,
     boundary,
     connections,
+    terrain,
   );
   const buildings = makeBuildings(
     city.id,
@@ -1024,6 +1233,7 @@ export function generateCityPlan(
     roadDrafts,
     districts,
     existingLockedBuildings,
+    terrain,
   );
 
   return {
@@ -1036,6 +1246,7 @@ export function generateCityPlan(
     road_architecture: config.layout,
     road_theme: config.roadTheme ?? "western",
     external_connections: connections,
+    terrain,
     districts,
     roads: finalizeRoads(roadDrafts),
     buildings,

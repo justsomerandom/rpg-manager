@@ -183,6 +183,7 @@ mod tests {
             road_theme: "elvish".into(),
             external_connections: vec![],
             entrances: vec![],
+            terrain: None,
             districts: Vec::<CityDistrict>::new(),
             roads: Vec::<CityRoad>::new(),
             buildings: Vec::<CityBuilding>::new(),

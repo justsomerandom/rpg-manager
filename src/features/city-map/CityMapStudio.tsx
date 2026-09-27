@@ -19,6 +19,7 @@ import {
   type CityMap,
   type CityRoad,
   type CitySize,
+  type CityTerrainContext,
   type CityType,
 } from "../../api/cityMap";
 import { getErrorMessage } from "../../api/client";
@@ -31,6 +32,8 @@ import {
   CITY_TYPE_OPTIONS,
   deriveRecommendedCitySize,
   generateCityPlan,
+  recommendedCityLayout,
+  recommendedLandmarkCount,
   stableCityRoadPointId,
   type CityGenerationConfig,
 } from "./generator";
@@ -55,6 +58,7 @@ type Props = {
   worldId: string;
   city: MapCity;
   externalConnections?: CityMapApproach[];
+  environment?: CityTerrainContext;
   onClose: () => void;
   onDirtyChange?: (dirty: boolean) => void;
   onSavingChange?: (saving: boolean) => void;
@@ -166,6 +170,23 @@ function attachApproaches(map: CityMap, approaches: readonly CityMapApproach[]):
   };
 }
 
+function attachEnvironment(map: CityMap, environment?: CityTerrainContext): CityMap {
+  return environment ? { ...map, terrain: environment } : map;
+}
+
+function environmentsMatch(current: CityMap["terrain"], expected?: CityTerrainContext) {
+  if (!expected) return true;
+  if (!current) return false;
+  return (
+    current.coastal === expected.coastal &&
+    Math.abs((current.coast_angle ?? 0) - (expected.coast_angle ?? 0)) < 0.0001 &&
+    Math.abs(current.elevation - expected.elevation) < 0.0001 &&
+    Math.abs(current.moisture - expected.moisture) < 0.0001 &&
+    Math.abs(current.temperature - expected.temperature) < 0.0001 &&
+    Math.abs(current.vegetation - expected.vegetation) < 0.0001
+  );
+}
+
 function applyRoadTheme(map: CityMap, theme: RoadTheme): CityMap {
   return {
     ...map,
@@ -192,6 +213,7 @@ function synchronizeApproaches(
   city: MapCity,
   map: CityMap,
   approaches: readonly CityMapApproach[],
+  environment?: CityTerrainContext,
 ): CityMap {
   if (approachesMatch(map, approaches)) return map;
   const config = configFromMap(map, city.population);
@@ -202,6 +224,7 @@ function synchronizeApproaches(
         config,
         [],
         approaches.map((approach) => approach.angle),
+        environment,
       ),
       (config.roadTheme ?? "western") as RoadTheme,
     ),
@@ -236,6 +259,7 @@ export function CityMapStudio({
   worldId,
   city,
   externalConnections = DEFAULT_APPROACHES,
+  environment,
   onClose,
   onDirtyChange,
   onSavingChange,
@@ -271,7 +295,7 @@ export function CityMapStudio({
   const [config, setConfig] = useState<CityGenerationConfig>(() => ({
     size: deriveRecommendedCitySize(city.population),
     cityType: cityTypeForLocation(city),
-    layout: "organic",
+    layout: recommendedCityLayout(cityTypeForLocation(city)),
     seed: Date.now(),
     density: 0.85,
     scale: 1,
@@ -404,7 +428,7 @@ export function CityMapStudio({
     const recommended: CityGenerationConfig = {
       size: deriveRecommendedCitySize(city.population),
       cityType: cityTypeForLocation(city),
-      layout: "organic",
+      layout: recommendedCityLayout(cityTypeForLocation(city)),
       seed: Date.now(),
       density: 0.85,
       scale: 1,
@@ -414,14 +438,19 @@ export function CityMapStudio({
       .then((existing) => {
         if (cancelled) return;
         if (existing) {
-          const synchronized = synchronizeApproaches(city, existing, externalConnections);
+          const approachesChanged = !approachesMatch(existing, externalConnections);
+          const environmentChanged = !environmentsMatch(existing.terrain, environment);
+          const synchronized = attachEnvironment(
+            synchronizeApproaches(city, existing, externalConnections, environment),
+            environment,
+          );
           setConfig(configFromMap(synchronized, city.population));
           setMapData(synchronized);
-          if (synchronized !== existing) {
+          if (approachesChanged || environmentChanged) {
             setDirty(true);
             revisionRef.current += 1;
             setStatus(
-              "World-road approaches were updated. Save to keep the synchronized city plan.",
+              "World-road approaches or terrain context changed. Save to keep the synchronized city plan.",
             );
           }
           setGeneratorOpen(false);
@@ -433,6 +462,7 @@ export function CityMapStudio({
                 recommended,
                 [],
                 externalConnections.map((approach) => approach.angle),
+                environment,
               ),
               (recommended.roadTheme ?? "western") as RoadTheme,
             ),
@@ -455,7 +485,7 @@ export function CityMapStudio({
       cancelled = true;
       generationJobRef.current += 1;
     };
-  }, [city, externalConnections, loadAttempt, worldId]);
+  }, [city, environment, externalConnections, loadAttempt, worldId]);
 
   useEffect(() => {
     const node = viewportRef.current;
@@ -524,6 +554,7 @@ export function CityMapStudio({
               config,
               locked,
               externalConnections.map((approach) => approach.angle),
+              environment,
             ),
             (config.roadTheme ?? "western") as RoadTheme,
           );
@@ -1217,7 +1248,15 @@ export function CityMapStudio({
                   <select
                     className="input-field"
                     value={config.cityType}
-                    onChange={(event) => updateConfig("cityType", event.target.value as CityType)}
+                    onChange={(event) => {
+                      const cityType = event.target.value as CityType;
+                      setConfig((current) => ({
+                        ...current,
+                        cityType,
+                        layout: recommendedCityLayout(cityType),
+                      }));
+                      setPreviewStale(true);
+                    }}
                   >
                     {CITY_TYPE_OPTIONS.map((option) => (
                       <option key={option.key} value={option.key}>
@@ -1232,6 +1271,12 @@ export function CityMapStudio({
                     }
                   </span>
                 </label>
+
+                <div className="rounded-xl border border-earth-clay/35 bg-earth-clay/10 p-3 text-xs leading-5 text-earth-sand">
+                  Starts with no landmarks. Recommended for this plan:{" "}
+                  {recommendedLandmarkCount(config.size, config.cityType)}. Add only the campaign
+                  locations you want after applying the plan.
+                </div>
 
                 <label className="block space-y-1.5 text-xs font-semibold text-slate-300">
                   Settlement size
@@ -1282,6 +1327,22 @@ export function CityMapStudio({
                     step={0.05}
                     value={config.density}
                     onChange={(event) => updateConfig("density", Number(event.target.value))}
+                  />
+                </label>
+
+                <label className="block space-y-2 text-xs font-semibold text-slate-300">
+                  City footprint{" "}
+                  <span className="float-right text-earth-sand">
+                    {Math.round((config.scale ?? 1) * 100)}%
+                  </span>
+                  <input
+                    className="w-full accent-emerald-500"
+                    type="range"
+                    min={0.75}
+                    max={1.3}
+                    step={0.05}
+                    value={config.scale ?? 1}
+                    onChange={(event) => updateConfig("scale", Number(event.target.value))}
                   />
                 </label>
 
