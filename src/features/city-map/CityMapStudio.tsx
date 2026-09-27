@@ -52,6 +52,7 @@ import {
   type CityLayerVisibility,
   type CityRenderOptions,
 } from "./rendering";
+import { citySaveAction } from "./saveState";
 import type { CityGenerationWorkerRequest, CityGenerationWorkerResponse } from "./generator.worker";
 
 export type CityMapApproach = {
@@ -321,7 +322,7 @@ export function CityMapStudio({
   const [mapData, setMapData] = useState<CityMap | null>(null);
   const [previewMap, setPreviewMap] = useState<CityMap | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [savePhase, setSavePhase] = useState<"idle" | "generating" | "saving">("idle");
   const [resetting, setResetting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -373,6 +374,15 @@ export function CityMapStudio({
 
   const displayedMap = generatorOpen && previewMap ? previewMap : mapData;
   const previewActive = Boolean(generatorOpen && previewMap);
+  const saving = savePhase !== "idle";
+  const saveAction = citySaveAction({
+    savePhase,
+    generatingPreview: generating,
+    hasDisplayedMap: Boolean(displayedMap),
+    generatorOpen,
+    previewReady: Boolean(previewMap && !previewStale),
+    dirty,
+  });
   const editable = Boolean(mapData && mode === "edit" && !previewActive && !saving);
 
   const renderOptions = useMemo<CityRenderOptions>(
@@ -631,6 +641,27 @@ export function CityMapStudio({
       });
   };
 
+  const generateConfiguredPlan = async () => {
+    const locked = preserveLocked
+      ? (mapData?.buildings.filter((building) => building.locked || building.source === "manual") ??
+        [])
+      : [];
+    const plan = await generatePlanInWorker({
+      city,
+      config,
+      lockedBuildings: locked,
+      entrances: externalConnections.map((approach) => approach.angle),
+      terrain: environment,
+    });
+    return normalizeCityMap(
+      attachApproaches(
+        applyRoadTheme(plan, (config.roadTheme ?? "western") as RoadTheme),
+        externalConnections,
+      ),
+      city.id,
+    );
+  };
+
   const applyPreview = () => {
     if (!previewMap || previewStale || generating) return;
     commitMap(previewMap, "Generated plan applied locally. Save when you're ready.");
@@ -639,13 +670,26 @@ export function CityMapStudio({
   };
 
   const handleSave = async () => {
-    const stagedPreview = previewActive && !previewStale ? previewMap : null;
-    const snapshot = stagedPreview ?? mapData;
-    if (!snapshot || saving || (!dirty && !stagedPreview)) return;
+    if (saveAction.disabled || saveAction.intent === "none") return;
     const saveRevision = revisionRef.current;
-    setSaving(true);
+    const shouldGenerate = saveAction.intent === "generate-and-save";
+    const savingGeneratedPlan = shouldGenerate || saveAction.intent === "save-preview";
+    setSavePhase(shouldGenerate ? "generating" : "saving");
     setError(null);
+    setStatus(
+      shouldGenerate ? "Generating the latest city settings before saving…" : "Saving city plan…",
+    );
     try {
+      const snapshot = shouldGenerate
+        ? await generateConfiguredPlan()
+        : saveAction.intent === "save-preview"
+          ? previewMap
+          : mapData;
+      if (!snapshot) throw new Error("There is no city plan available to save.");
+      if (shouldGenerate) {
+        setSavePhase("saving");
+        setStatus("Latest city plan generated. Saving it now…");
+      }
       const saved = await saveCityMap(worldId, city.id, snapshot);
       if (revisionRef.current === saveRevision) {
         setMapData(saved);
@@ -654,7 +698,7 @@ export function CityMapStudio({
         setPreviewStale(false);
         setDirty(false);
         setStatus(
-          stagedPreview
+          savingGeneratedPlan
             ? "Generated city plan applied and saved."
             : "City plan saved. The studio remains open.",
         );
@@ -664,7 +708,7 @@ export function CityMapStudio({
     } catch (caught) {
       setError(getErrorMessage(caught, "We couldn't save this city plan."));
     } finally {
-      setSaving(false);
+      setSavePhase("idle");
     }
   };
 
@@ -1289,13 +1333,11 @@ export function CityMapStudio({
           </button>
           <button
             type="button"
-            className="primary-button min-h-11 whitespace-nowrap"
-            onClick={handleSave}
-            disabled={
-              saving || generating || !displayedMap || (previewActive ? previewStale : !dirty)
-            }
+            className="primary-button min-h-11 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0"
+            onClick={() => void handleSave()}
+            disabled={saveAction.disabled}
           >
-            {saving ? "Saving…" : previewActive ? "Apply & save plan" : "Save city plan"}
+            {saveAction.label}
           </button>
         </div>
       </header>
@@ -1490,7 +1532,9 @@ export function CityMapStudio({
               <div className="rounded-2xl border border-grove-600/80 bg-grove-950/95 px-5 py-4 text-sm font-semibold text-slate-100 shadow-2xl">
                 <span className="loading-dot" aria-hidden="true" />
                 {saving
-                  ? "Saving city plan…"
+                  ? savePhase === "generating"
+                    ? "Generating the latest city plan…"
+                    : "Saving city plan…"
                   : resetting
                     ? "Resetting city plan…"
                     : exporting
@@ -1511,6 +1555,20 @@ export function CityMapStudio({
                   : `${activeTool[0].toUpperCase()}${activeTool.slice(1)} tool`}
             </span>
           </div>
+
+          {(error || status) && (
+            <div
+              className={`pointer-events-none absolute bottom-16 left-1/2 z-20 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-xl border px-4 py-2.5 text-center text-xs leading-5 shadow-2xl backdrop-blur ${
+                error
+                  ? "border-red-400/50 bg-red-950/95 text-red-100"
+                  : "border-grove-600/80 bg-grove-950/92 text-slate-200"
+              }`}
+              role={error ? "alert" : "status"}
+              aria-live={error ? "assertive" : "polite"}
+            >
+              {error ?? status}
+            </div>
+          )}
 
           {mode === "presentation" && (
             <div className="absolute right-4 top-4 z-10 flex gap-2">
