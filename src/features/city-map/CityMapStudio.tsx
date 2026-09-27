@@ -8,6 +8,7 @@ import {
   type WheelEvent,
 } from "react";
 import {
+  deleteCityMap,
   getCityMap,
   normalizeCityMap,
   saveCityMap,
@@ -312,6 +313,8 @@ export function CityMapStudio({
   const [previewMap, setPreviewMap] = useState<CityMap | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [rendering, setRendering] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -319,6 +322,7 @@ export function CityMapStudio({
   const [status, setStatus] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [closeRequested, setCloseRequested] = useState(false);
+  const [resetRequested, setResetRequested] = useState(false);
   const [generatorOpen, setGeneratorOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [previewStale, setPreviewStale] = useState(false);
@@ -641,6 +645,97 @@ export function CityMapStudio({
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleReset = async () => {
+    if (resetting || saving) return;
+    setResetting(true);
+    setError(null);
+    setStatus("Removing the saved plan and preparing a fresh preview…");
+    try {
+      await deleteCityMap(worldId, city.id);
+      const cityType = cityTypeForLocation(city);
+      const recommended: CityGenerationConfig = {
+        size: deriveRecommendedCitySize(city.population),
+        cityType,
+        layout: recommendedCityLayout(cityType),
+        seed: Date.now(),
+        density: 0.85,
+        scale: 1,
+        roadTheme: "western",
+      };
+      const generated = await generatePlanInWorker({
+        city,
+        config: recommended,
+        lockedBuildings: [],
+        entrances: externalConnections.map((approach) => approach.angle),
+        terrain: environment,
+      });
+      setConfig(recommended);
+      setMapData(null);
+      setPreviewMap(
+        normalizeCityMap(
+          attachApproaches(applyRoadTheme(generated, "western"), externalConnections),
+          city.id,
+        ),
+      );
+      setGeneratorOpen(true);
+      setPreviewStale(false);
+      setDirty(false);
+      setSelection(null);
+      setUndoStack([]);
+      setRedoStack([]);
+      revisionRef.current = 0;
+      setStatus("Saved plan removed. Review and apply the fresh preview when ready.");
+    } catch (caught) {
+      setError(getErrorMessage(caught, "We couldn't reset this city plan."));
+    } finally {
+      setResetting(false);
+      setResetRequested(false);
+    }
+  };
+
+  const exportPng = () => {
+    if (!displayedMap || exporting) return;
+    setExporting(true);
+    setStatus("Rendering a clean high-resolution PNG…");
+    window.requestAnimationFrame(() => {
+      window.setTimeout(() => {
+        try {
+          const canvas = document.createElement("canvas");
+          drawCityMap(canvas, displayedMap, {
+            viewMode,
+            viewport: { width: 1800, height: 1350, dpr: 1, zoom: 1, padding: 72 },
+            layers,
+            maxBuildingExtrusion: viewMode === "isometric" ? 14 : 0,
+            resizeCanvas: true,
+          });
+          canvas.toBlob((blob) => {
+            if (!blob) {
+              setError("The browser could not create the city image.");
+              setExporting(false);
+              return;
+            }
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `${
+              city.name
+                .replace(/[^a-z0-9]+/gi, "-")
+                .replace(/^-|-$/g, "")
+                .toLowerCase() || "city"
+            }-${viewMode}.png`;
+            link.click();
+            window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+            setStatus("City map exported as PNG.");
+            setExporting(false);
+          }, "image/png");
+        } catch (caught) {
+          setError(getErrorMessage(caught, "We couldn't export this city image."));
+          setExporting(false);
+        }
+      }, 0);
+    });
   };
 
   const requestClose = () => {
@@ -1145,7 +1240,9 @@ export function CityMapStudio({
 
   return (
     <div className="fixed inset-0 z-[80] flex min-h-0 flex-col overflow-hidden bg-[#06110c] text-brand-glow">
-      <header className="relative z-20 flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-grove-600/75 bg-grove-900/95 px-3 py-2 shadow-xl backdrop-blur-xl sm:px-5">
+      <header
+        className={`${mode === "presentation" ? "hidden" : "flex"} relative z-20 min-h-16 shrink-0 items-center justify-between gap-3 border-b border-grove-600/75 bg-grove-900/95 px-3 py-2 shadow-xl backdrop-blur-xl sm:px-5`}
+      >
         <div className="flex min-w-0 items-center gap-3">
           <button
             ref={closeButtonRef}
@@ -1188,7 +1285,9 @@ export function CityMapStudio({
         </div>
       </header>
 
-      <div className="relative z-10 flex min-h-12 shrink-0 items-center gap-2 overflow-x-auto border-b border-grove-600/65 bg-grove-900/80 px-3 py-1.5 sm:px-5">
+      <div
+        className={`${mode === "presentation" ? "hidden" : "flex"} relative z-10 min-h-12 shrink-0 items-center gap-2 overflow-x-auto border-b border-grove-600/65 bg-grove-900/80 px-3 py-1.5 sm:px-5`}
+      >
         <div
           className="flex rounded-xl border border-grove-600 bg-grove-950/70 p-1"
           role="group"
@@ -1256,6 +1355,22 @@ export function CityMapStudio({
         >
           Generate plan
         </button>
+        <button
+          type="button"
+          className="secondary-button min-h-11 whitespace-nowrap"
+          onClick={exportPng}
+          disabled={exporting || rendering || !displayedMap}
+        >
+          {exporting ? "Exporting…" : "Export PNG"}
+        </button>
+        <button
+          type="button"
+          className="danger-button min-h-11 whitespace-nowrap"
+          onClick={() => setResetRequested(true)}
+          disabled={saving || resetting}
+        >
+          Reset plan
+        </button>
         <span className="ml-auto whitespace-nowrap text-[11px] text-slate-400">
           {mode === "presentation" ? "Presentation" : "Edit"} ·{" "}
           {viewMode === "topdown" ? "Top-down" : "Isometric"}
@@ -1265,7 +1380,7 @@ export function CityMapStudio({
       <div className="relative flex min-h-0 flex-1">
         <nav
           aria-label="City map tools"
-          className="relative z-10 flex w-[4.5rem] shrink-0 flex-col items-center gap-2 border-r border-grove-600/70 bg-grove-900/92 px-2 py-4"
+          className={`${mode === "presentation" ? "hidden" : "flex"} relative z-10 w-[4.5rem] shrink-0 flex-col items-center gap-2 border-r border-grove-600/70 bg-grove-900/92 px-2 py-4`}
         >
           {(
             [
@@ -1352,6 +1467,7 @@ export function CityMapStudio({
                 if (event.key === "Escape") {
                   cancelCanvasGesture();
                   setSelection(null);
+                  if (mode === "presentation") setMode("edit");
                 } else if (
                   (event.key === "Delete" || event.key === "Backspace") &&
                   selection &&
@@ -1368,7 +1484,7 @@ export function CityMapStudio({
             />
           ) : null}
 
-          {(saving || generating || rendering) && (
+          {(saving || generating || rendering || resetting || exporting) && (
             <div
               className="pointer-events-auto absolute inset-0 z-20 flex items-center justify-center bg-grove-950/45 backdrop-blur-[1px]"
               role="status"
@@ -1378,9 +1494,13 @@ export function CityMapStudio({
                 <span className="loading-dot" aria-hidden="true" />
                 {saving
                   ? "Saving city plan…"
-                  : generating
-                    ? "Generating city plan…"
-                    : "Rendering view…"}
+                  : resetting
+                    ? "Resetting city plan…"
+                    : exporting
+                      ? "Exporting city image…"
+                      : generating
+                        ? "Generating city plan…"
+                        : "Rendering view…"}
               </div>
             </div>
           )}
@@ -1399,6 +1519,17 @@ export function CityMapStudio({
               </span>
             )}
           </div>
+
+          {mode === "presentation" && (
+            <div className="absolute right-4 top-4 z-10 flex gap-2">
+              <button type="button" className="secondary-button" onClick={exportPng}>
+                {exporting ? "Exporting…" : "Export PNG"}
+              </button>
+              <button type="button" className="primary-button" onClick={() => setMode("edit")}>
+                Exit presentation
+              </button>
+            </div>
+          )}
 
           <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-grove-600/80 bg-grove-950/85 p-1 shadow-xl backdrop-blur">
             <button
@@ -1423,7 +1554,7 @@ export function CityMapStudio({
           </div>
         </div>
 
-        {inspectorOpen && (
+        {mode === "edit" && inspectorOpen && (
           <button
             type="button"
             aria-label="Close city inspector"
@@ -1432,7 +1563,7 @@ export function CityMapStudio({
           />
         )}
         <aside
-          className={`${inspectorOpen ? "absolute inset-y-0 right-0 z-30 block w-[min(22rem,calc(100vw-4.5rem))]" : "hidden"} shrink-0 overflow-y-auto border-l border-grove-600/70 bg-grove-900/97 shadow-2xl xl:relative xl:z-10 xl:block xl:w-[22rem] xl:shadow-none`}
+          className={`${mode === "edit" && inspectorOpen ? "absolute inset-y-0 right-0 z-30 block w-[min(22rem,calc(100vw-4.5rem))]" : "hidden"} shrink-0 overflow-y-auto border-l border-grove-600/70 bg-grove-900/97 shadow-2xl xl:relative xl:z-10 ${mode === "edit" ? "xl:block" : "xl:hidden"} xl:w-[22rem] xl:shadow-none`}
         >
           <div className="space-y-5 p-5">
             <div className="flex items-center justify-between xl:hidden">
@@ -2294,7 +2425,9 @@ export function CityMapStudio({
         </aside>
       </div>
 
-      <footer className="flex min-h-9 shrink-0 items-center justify-between gap-4 border-t border-grove-600/70 bg-grove-950/95 px-4 text-[11px] text-slate-400">
+      <footer
+        className={`${mode === "presentation" ? "hidden" : "flex"} min-h-9 shrink-0 items-center justify-between gap-4 border-t border-grove-600/70 bg-grove-950/95 px-4 text-[11px] text-slate-400`}
+      >
         <span>
           {previewActive
             ? "Preview mode — Apply generated plan to edit"
@@ -2320,6 +2453,16 @@ export function CityMapStudio({
           setCloseRequested(false);
           onClose();
         }}
+      />
+      <ConfirmDialog
+        open={resetRequested}
+        eyebrow="Reset city plan"
+        title={`Reset ${city.name}?`}
+        description="This removes the saved city plan and every current local edit. A fresh generated preview will open, but it will not be saved until you apply and save it."
+        confirmLabel="Reset city plan"
+        danger
+        onCancel={() => setResetRequested(false)}
+        onConfirm={() => void handleReset()}
       />
     </div>
   );
