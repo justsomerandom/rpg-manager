@@ -13,7 +13,17 @@ export type CityMapPoint = {
 
 export type CityEntitySource = "generated" | "manual" | "legacy";
 export type CityType = "capital" | "trade" | "port" | "fortress" | "industrial" | "rural";
-export type CityLayout = "ring" | "grid" | "radial" | "organic";
+export type CityLayout =
+  | "organic"
+  | "grid"
+  | "radial"
+  | "ring"
+  | "medieval"
+  | "market"
+  | "axial"
+  | "garden"
+  | "canal"
+  | "terraced";
 export type CityBuildingUse = "residential" | "commercial" | "industrial" | "civic" | "landmark";
 export type CityDistrictUse =
   "civic" | "commercial" | "residential" | "industrial" | "harbor" | "green" | "mixed";
@@ -115,7 +125,18 @@ const CITY_TYPES = new Set<CityType>([
   "industrial",
   "rural",
 ]);
-const ROAD_ARCHITECTURES = new Set<CityLayout>(["ring", "grid", "radial", "organic"]);
+const ROAD_ARCHITECTURES = new Set<CityLayout>([
+  "organic",
+  "grid",
+  "radial",
+  "ring",
+  "medieval",
+  "market",
+  "axial",
+  "garden",
+  "canal",
+  "terraced",
+]);
 const ROAD_THEMES = new Set([
   "western",
   "mediterranean",

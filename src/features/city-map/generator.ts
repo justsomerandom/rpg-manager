@@ -106,12 +106,42 @@ export const CITY_LAYOUT_OPTIONS: ReadonlyArray<{
   {
     key: "radial",
     label: "Radial",
-    description: "Spokes and orbital streets focused on the civic centre.",
+    description: "Offset avenues and orbital collectors serving several inner hubs.",
   },
   {
     key: "ring",
     label: "Ring",
     description: "Concentric routes linked by controlled cross-city roads.",
+  },
+  {
+    key: "medieval",
+    label: "Medieval core",
+    description: "A tight old centre, crooked lanes, later wards, and gate-led growth.",
+  },
+  {
+    key: "market",
+    label: "Market town",
+    description: "Trade roads widen around a market circuit with irregular back lanes.",
+  },
+  {
+    key: "axial",
+    label: "Axial plan",
+    description: "A few planned boulevards organize otherwise varied neighborhood streets.",
+  },
+  {
+    key: "garden",
+    label: "Garden city",
+    description: "Curved neighborhood loops, green wedges, and limited through traffic.",
+  },
+  {
+    key: "canal",
+    label: "Canal city",
+    description: "Waterside corridors, bridges, and narrow service streets shaped by water.",
+  },
+  {
+    key: "terraced",
+    label: "Terraced hillside",
+    description: "Contour-following streets joined by sparse steep connectors and stairs.",
   },
 ];
 
@@ -165,16 +195,46 @@ export function deriveRecommendedCitySize(population: number): CitySize {
 export function recommendedCityLayout(cityType: CityType): CityLayout {
   switch (cityType) {
     case "capital":
-      return "radial";
+      return "axial";
     case "trade":
+      return "market";
     case "industrial":
       return "grid";
     case "fortress":
       return "ring";
     case "port":
+      return "canal";
     case "rural":
       return "organic";
   }
+}
+
+export function cityTypeAvailability(
+  cityType: CityType,
+  terrain?: CityTerrainContext,
+): { available: boolean; reason?: string } {
+  if (!terrain) return { available: true };
+  if (cityType === "port" && !terrain.coastal) {
+    return { available: false, reason: "Requires a coast or navigable waterfront." };
+  }
+  if (cityType === "fortress" && terrain.elevation < 0.38) {
+    return { available: false, reason: "Requires elevated or naturally defensible terrain." };
+  }
+  return { available: true };
+}
+
+export function cityLayoutAvailability(
+  layout: CityLayout,
+  terrain?: CityTerrainContext,
+): { available: boolean; reason?: string } {
+  if (!terrain) return { available: true };
+  if (layout === "canal" && !terrain.coastal && terrain.moisture < 0.62) {
+    return { available: false, reason: "Requires coastal or high-moisture terrain." };
+  }
+  if (layout === "terraced" && terrain.elevation < 0.5) {
+    return { available: false, reason: "Requires substantial elevation." };
+  }
+  return { available: true };
 }
 
 export function recommendedLandmarkCount(size: CitySize, cityType: CityType): number {
@@ -381,7 +441,24 @@ function makeRoadNetwork(
     rawPoints: readonly Point[],
     externalConnectionIndex?: number,
   ) => {
-    const points = cleanPolyline(rawPoints);
+    let shapedPoints = [...rawPoints];
+    if (shapedPoints.length === 2) {
+      const [start, end] = shapedPoints as [Point, Point];
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const segmentLength = Math.max(0.0001, Math.hypot(dx, dy));
+      const entropy = importance === "main" ? 0.004 : importance === "secondary" ? 0.008 : 0.012;
+      const offset = rng.range(-entropy, entropy);
+      shapedPoints = [
+        start,
+        {
+          x: (start.x + end.x) / 2 + (-dy / segmentLength) * offset,
+          y: (start.y + end.y) / 2 + (dx / segmentLength) * offset,
+        },
+        end,
+      ];
+    }
+    const points = cleanPolyline(shapedPoints);
     if (points.length < 2) return;
     const id = stableCityFeatureId(cityId, seed, "road", roadIndex);
     const nameChoices = ROAD_NAMES[importance];
@@ -399,6 +476,21 @@ function makeRoadNetwork(
 
   const center = { x: boundary.x, y: boundary.y };
   const level = SIZE_ORDER[size];
+  const loopPoints = (
+    scale: number,
+    samples: number,
+    startAngle: number,
+    irregularity = 0,
+  ): Point[] =>
+    Array.from({ length: samples + 1 }, (_, index) => {
+      const angle = startAngle + (index / samples) * TAU;
+      const wave =
+        irregularity > 0
+          ? Math.sin(angle * 3 + seed * 0.0001) * irregularity +
+            Math.sin(angle * 5 - seed * 0.00013) * irregularity * 0.45
+          : 0;
+      return pointOnEllipse(boundary, angle, scale + wave);
+    });
 
   if (layout === "grid") {
     const lineCount = typeAdjustedCount([5, 7, 10, 13][level]!, cityType);
@@ -429,20 +521,24 @@ function makeRoadNetwork(
   } else if (layout === "radial") {
     const spokeCount = typeAdjustedCount([6, 8, 11, 14][level]!, cityType);
     const startAngle = rng.range(-Math.PI, Math.PI);
+    const innerScale = cityType === "rural" ? 0.2 : 0.16;
+    const innerSamples = Math.max(16, spokeCount * 2);
+    const innerLoop = loopPoints(innerScale, innerSamples, startAngle, 0.012);
+    addRoad("secondary", innerLoop);
     for (let index = 0; index < spokeCount; index += 1) {
-      const angle = startAngle + (index / spokeCount) * TAU;
+      const nominalAngle = startAngle + (index / spokeCount) * TAU;
+      const angle = nominalAngle + rng.range(-0.055, 0.055);
       const importance: RoadImportance =
         index % Math.max(2, Math.floor(spokeCount / 4)) === 0 ? "main" : "secondary";
-      const middle = pointOnEllipse(boundary, angle + rng.range(-0.035, 0.035), 0.5);
-      addRoad(importance, [center, middle, pointOnEllipse(boundary, angle, 0.94)]);
+      const inner = innerLoop[Math.round((index / spokeCount) * innerSamples)]!;
+      const middle = pointOnEllipse(boundary, angle + rng.range(-0.065, 0.065), 0.54);
+      addRoad(importance, chaikinSmooth([inner, middle, pointOnEllipse(boundary, angle, 0.94)], 1));
     }
-    const ringCount = Math.max(2, typeAdjustedCount([2, 3, 4, 5][level]!, cityType));
+    const ringCount = Math.max(1, typeAdjustedCount([1, 2, 3, 4][level]!, cityType));
     for (let ring = 1; ring <= ringCount; ring += 1) {
-      const scale = (ring / (ringCount + 1)) * 0.91;
+      const scale = innerScale + (ring / (ringCount + 1)) * (0.91 - innerScale);
       const samples = Math.max(18, spokeCount * 2);
-      const points = Array.from({ length: samples + 1 }, (_, index) =>
-        pointOnEllipse(boundary, startAngle + (index / samples) * TAU, scale),
-      );
+      const points = loopPoints(scale, samples, startAngle + ring * 0.035, 0.008);
       addRoad(ring === ringCount ? "main" : ring % 2 === 0 ? "secondary" : "alley", points);
     }
   } else if (layout === "ring") {
@@ -452,9 +548,7 @@ function makeRoadNetwork(
     for (let ring = 1; ring <= ringCount; ring += 1) {
       const scale = (ring / ringCount) * 0.91;
       const samples = Math.max(20, spokeCount * 3);
-      const points = Array.from({ length: samples + 1 }, (_, index) =>
-        pointOnEllipse(boundary, startAngle + (index / samples) * TAU, scale),
-      );
+      const points = loopPoints(scale, samples, startAngle + ring * 0.025, 0.006);
       const importance: RoadImportance =
         ring === 1 || ring === ringCount ? "main" : ring % 2 === 0 ? "secondary" : "alley";
       addRoad(importance, points);
@@ -467,18 +561,228 @@ function makeRoadNetwork(
         pointOnEllipse(boundary, angle, 0.93),
       ]);
     }
+  } else if (layout === "medieval") {
+    const startAngle = rng.range(-Math.PI, Math.PI);
+    const gateCount = typeAdjustedCount([4, 5, 7, 9][level]!, cityType);
+    const coreLoop = loopPoints(0.16, Math.max(18, gateCount * 3), startAngle, 0.025);
+    addRoad("secondary", coreLoop);
+    addRoad("alley", loopPoints(0.29, 24, startAngle + 0.08, 0.035));
+    addRoad("secondary", loopPoints(0.5, 30, startAngle - 0.05, 0.028));
+    for (let index = 0; index < gateCount; index += 1) {
+      const angle = startAngle + (index / gateCount) * TAU + rng.range(-0.12, 0.12);
+      const inner = coreLoop[Math.round((index / gateCount) * (coreLoop.length - 1))]!;
+      const middleA = pointOnEllipse(boundary, angle + rng.range(-0.2, 0.2), 0.38);
+      const middleB = pointOnEllipse(boundary, angle + rng.range(-0.12, 0.12), 0.67);
+      addRoad(
+        index % 3 === 0 ? "main" : "secondary",
+        chaikinSmooth([inner, middleA, middleB, pointOnEllipse(boundary, angle, 0.95)], 2),
+      );
+    }
+    const laneCount = [5, 8, 12, 16][level]!;
+    for (let index = 0; index < laneCount; index += 1) {
+      const angle = startAngle + rng.range(0, TAU);
+      const span = rng.range(0.35, 0.8);
+      addRoad(
+        "alley",
+        chaikinSmooth(
+          [
+            pointOnEllipse(boundary, angle, rng.range(0.2, 0.42)),
+            pointOnEllipse(boundary, angle + rng.range(0.18, 0.42), span * 0.72),
+            pointOnEllipse(boundary, angle + rng.range(0.3, 0.58), span),
+          ],
+          1,
+        ),
+      );
+    }
+  } else if (layout === "market") {
+    const marketAngle = rng.range(-0.22, 0.22);
+    const cosine = Math.cos(marketAngle);
+    const sine = Math.sin(marketAngle);
+    const marketPoint = (angle: number, scale = 1): Point => {
+      const x = Math.cos(angle) * boundary.radiusX * 0.34 * scale;
+      const y = Math.sin(angle) * boundary.radiusY * 0.19 * scale;
+      return { x: center.x + x * cosine - y * sine, y: center.y + x * sine + y * cosine };
+    };
+    const marketRing = Array.from({ length: 25 }, (_, index) => marketPoint((index / 24) * TAU));
+    addRoad("main", marketRing);
+    const approachCount = typeAdjustedCount([4, 6, 8, 10][level]!, cityType);
+    for (let index = 0; index < approachCount; index += 1) {
+      const angle = marketAngle + (index / approachCount) * TAU + rng.range(-0.1, 0.1);
+      const inner = marketRing[Math.round((index / approachCount) * 24)]!;
+      addRoad(
+        index % 3 === 0 ? "main" : "secondary",
+        chaikinSmooth(
+          [
+            inner,
+            pointOnEllipse(boundary, angle + rng.range(-0.1, 0.1), 0.55),
+            pointOnEllipse(boundary, angle, 0.95),
+          ],
+          1,
+        ),
+      );
+    }
+    addRoad("secondary", loopPoints(0.58, 28, marketAngle, 0.025));
+    addRoad("alley", loopPoints(0.78, 32, marketAngle + 0.04, 0.02));
+  } else if (layout === "axial") {
+    const axisAngle = rng.range(-0.32, 0.32);
+    const axisCount = level >= 2 ? 3 : 2;
+    for (let axis = 0; axis < axisCount; axis += 1) {
+      const angle = axisAngle + (axis * Math.PI) / Math.max(2, axisCount);
+      const offset = axis === 0 ? 0 : rng.range(-0.05, 0.05);
+      const perpendicular = angle + Math.PI / 2;
+      const origin = {
+        x: center.x + Math.cos(perpendicular) * offset,
+        y: center.y + Math.sin(perpendicular) * offset,
+      };
+      const span = Math.max(boundary.radiusX, boundary.radiusY) * 0.92;
+      addRoad("main", [
+        { x: origin.x - Math.cos(angle) * span, y: origin.y - Math.sin(angle) * span },
+        { x: origin.x + Math.cos(angle) * span, y: origin.y + Math.sin(angle) * span },
+      ]);
+    }
+    const crossCount = typeAdjustedCount([5, 7, 10, 13][level]!, cityType);
+    for (let index = 0; index < crossCount; index += 1) {
+      const ratio = (index / Math.max(1, crossCount - 1)) * 1.5 - 0.75;
+      const offset = ratio * boundary.radiusX;
+      const along = { x: Math.cos(axisAngle), y: Math.sin(axisAngle) };
+      const across = { x: -along.y, y: along.x };
+      const origin = { x: center.x + along.x * offset, y: center.y + along.y * offset };
+      const span = boundary.radiusY * rng.range(0.42, 0.78);
+      addRoad(index % 3 === 1 ? "secondary" : "alley", [
+        { x: origin.x - across.x * span, y: origin.y - across.y * span },
+        { x: origin.x + across.x * span, y: origin.y + across.y * span },
+      ]);
+    }
+  } else if (layout === "garden") {
+    const neighborhoodCount = [3, 4, 6, 8][level]!;
+    const startAngle = rng.range(-Math.PI, Math.PI);
+    const neighborhoodEntries: Point[] = [];
+    const innerLoop = loopPoints(0.2, 20, startAngle, 0.018);
+    addRoad("secondary", innerLoop);
+    for (let index = 0; index < neighborhoodCount; index += 1) {
+      const angle = startAngle + (index / neighborhoodCount) * TAU + rng.range(-0.12, 0.12);
+      const hub = pointOnEllipse(boundary, angle, rng.range(0.46, 0.66));
+      const radiusX = boundary.radiusX * rng.range(0.12, 0.18);
+      const radiusY = boundary.radiusY * rng.range(0.1, 0.15);
+      const neighborhoodLoop = cleanPolyline(
+        Array.from({ length: 17 }, (_, pointIndex) => {
+          const loopAngle = (pointIndex / 16) * TAU;
+          return {
+            x: hub.x + Math.cos(loopAngle) * radiusX,
+            y: hub.y + Math.sin(loopAngle) * radiusY,
+          };
+        }),
+      );
+      const entryAngle =
+        (Math.atan2(Math.sin(angle + Math.PI), Math.cos(angle + Math.PI)) + TAU) % TAU;
+      const entryIndex = Math.round((entryAngle / TAU) * 16);
+      neighborhoodEntries.push(neighborhoodLoop[entryIndex]!);
+      addRoad(index % 3 === 0 ? "secondary" : "alley", neighborhoodLoop);
+    }
+    neighborhoodEntries.forEach((entry, index) => {
+      const next = neighborhoodEntries[(index + 1) % neighborhoodEntries.length]!;
+      const inner = innerLoop[Math.round((index / neighborhoodEntries.length) * 20)]!;
+      const control = pointOnEllipse(
+        boundary,
+        startAngle + ((index + 0.5) / neighborhoodEntries.length) * TAU,
+        0.38,
+      );
+      addRoad("secondary", chaikinSmooth([inner, control, entry], 1));
+      addRoad(index % 2 === 0 ? "main" : "secondary", chaikinSmooth([entry, control, next], 2));
+    });
+  } else if (layout === "canal") {
+    const coastAngle =
+      terrain?.coastal && Number.isFinite(terrain.coast_angle)
+        ? terrain.coast_angle!
+        : rng.range(-Math.PI, Math.PI);
+    const corridorAngle = coastAngle + Math.PI / 2;
+    const along = { x: Math.cos(corridorAngle), y: Math.sin(corridorAngle) };
+    const across = { x: -along.y, y: along.x };
+    const corridorCount = [3, 4, 6, 8][level]!;
+    for (let index = 0; index < corridorCount; index += 1) {
+      const ratio = (index / Math.max(1, corridorCount - 1)) * 1.25 - 0.75;
+      const origin = {
+        x: center.x + across.x * boundary.radiusY * ratio,
+        y: center.y + across.y * boundary.radiusY * ratio,
+      };
+      const span = Math.max(boundary.radiusX, boundary.radiusY) * rng.range(0.68, 0.9);
+      const bend = rng.range(-0.035, 0.035);
+      addRoad(index % 3 === 0 ? "main" : "secondary", [
+        { x: origin.x - along.x * span, y: origin.y - along.y * span },
+        { x: origin.x + across.x * bend, y: origin.y + across.y * bend },
+        { x: origin.x + along.x * span, y: origin.y + along.y * span },
+      ]);
+    }
+    const bridgeCount = [3, 4, 5, 7][level]!;
+    for (let index = 0; index < bridgeCount; index += 1) {
+      const ratio = (index / Math.max(1, bridgeCount - 1)) * 1.4 - 0.7;
+      const origin = {
+        x: center.x + along.x * boundary.radiusX * ratio,
+        y: center.y + along.y * boundary.radiusX * ratio,
+      };
+      const span = boundary.radiusY * rng.range(0.55, 0.82);
+      addRoad(index % 2 === 0 ? "secondary" : "alley", [
+        { x: origin.x - across.x * span, y: origin.y - across.y * span },
+        { x: origin.x + across.x * span, y: origin.y + across.y * span },
+      ]);
+    }
+  } else if (layout === "terraced") {
+    const slopeAngle =
+      terrain?.coastal && Number.isFinite(terrain.coast_angle)
+        ? terrain.coast_angle! + Math.PI
+        : rng.range(-Math.PI, Math.PI);
+    const terraceCount = typeAdjustedCount([4, 6, 8, 11][level]!, cityType);
+    addRoad("main", [
+      pointOnEllipse(boundary, slopeAngle, 0.1),
+      pointOnEllipse(boundary, slopeAngle + rng.range(-0.035, 0.035), 0.96),
+    ]);
+    for (let terrace = 1; terrace <= terraceCount; terrace += 1) {
+      const scale = 0.14 + (terrace / terraceCount) * 0.78;
+      const span = Math.PI * rng.range(0.9, 1.45);
+      const start = slopeAngle - span / 2 + rng.range(-0.08, 0.08);
+      const samples = Math.max(8, Math.round(span / 0.13));
+      addRoad(
+        terrace % 3 === 0 ? "secondary" : "alley",
+        Array.from({ length: samples + 1 }, (_, index) =>
+          pointOnEllipse(
+            boundary,
+            start + (index / samples) * span,
+            scale + Math.sin(index * 0.7) * 0.006,
+          ),
+        ),
+      );
+    }
+    const connectorCount = [3, 4, 6, 7][level]!;
+    for (let index = 0; index < connectorCount; index += 1) {
+      const angle = slopeAngle + Math.PI / 2 + (index / connectorCount) * Math.PI;
+      addRoad(
+        index % 3 === 0 ? "main" : "secondary",
+        chaikinSmooth(
+          [
+            pointOnEllipse(boundary, angle + rng.range(-0.08, 0.08), 0.16),
+            pointOnEllipse(boundary, angle + rng.range(-0.05, 0.05), 0.52),
+            pointOnEllipse(boundary, angle, 0.94),
+          ],
+          1,
+        ),
+      );
+    }
   } else {
     const arterialCount = typeAdjustedCount([4, 6, 8, 10][level]!, cityType);
     const startAngle = rng.range(-Math.PI, Math.PI);
     const arterialAngles: number[] = [];
     const arterialPaths: Point[][] = [];
+    const innerSamples = Math.max(16, arterialCount * 2);
+    const innerLoop = loopPoints(0.16, innerSamples, startAngle, 0.024);
+    addRoad("secondary", innerLoop);
     for (let index = 0; index < arterialCount; index += 1) {
       const angle = startAngle + (index / arterialCount) * TAU + rng.range(-0.13, 0.13);
       arterialAngles.push(angle);
-      const controlA = pointOnEllipse(boundary, angle + rng.range(-0.18, 0.18), 0.28);
+      const hub = innerLoop[Math.round((index / arterialCount) * innerSamples)]!;
+      const controlA = pointOnEllipse(boundary, angle + rng.range(-0.18, 0.18), 0.3);
       const controlB = pointOnEllipse(boundary, angle + rng.range(-0.12, 0.12), 0.62);
       const smoothed = chaikinSmooth(
-        [center, controlA, controlB, pointOnEllipse(boundary, angle, 0.94)],
+        [hub, controlA, controlB, pointOnEllipse(boundary, angle, 0.94)],
         2,
       );
       arterialPaths.push(smoothed);
@@ -517,16 +821,24 @@ function makeRoadNetwork(
 
   // Each settlement type gets a recognizable structural layer regardless of the selected layout.
   if (cityType === "capital") {
+    const avenueAngle = rng.range(-0.18, 0.18);
+    const perpendicular = avenueAngle + Math.PI / 2;
+    const avenueCentre = {
+      x: center.x + Math.cos(perpendicular) * boundary.radiusX * 0.06,
+      y: center.y + Math.sin(perpendicular) * boundary.radiusY * 0.06,
+    };
+    const span = Math.max(boundary.radiusX, boundary.radiusY) * 0.9;
     addRoad("main", [
-      pointOnEllipse(boundary, Math.PI, 0.94),
-      center,
-      pointOnEllipse(boundary, 0, 0.94),
+      {
+        x: avenueCentre.x - Math.cos(avenueAngle) * span,
+        y: avenueCentre.y - Math.sin(avenueAngle) * span,
+      },
+      {
+        x: avenueCentre.x + Math.cos(avenueAngle) * span,
+        y: avenueCentre.y + Math.sin(avenueAngle) * span,
+      },
     ]);
-    addRoad("main", [
-      pointOnEllipse(boundary, -Math.PI / 2, 0.94),
-      center,
-      pointOnEllipse(boundary, Math.PI / 2, 0.94),
-    ]);
+    addRoad("secondary", loopPoints(0.25, 24, avenueAngle, 0.008));
   } else if (cityType === "trade") {
     const marketRing = Array.from({ length: 25 }, (_, index) =>
       pointOnEllipse(boundary, (index / 24) * TAU, 0.3),
@@ -539,14 +851,14 @@ function makeRoadNetwork(
     addRoad("main", defensiveRing);
   } else if (cityType === "industrial") {
     const freightAngle = rng.range(-0.16, 0.16);
-    for (const offset of [-0.22, 0, 0.22]) {
+    for (const [index, offset] of [-0.28, 0.08, 0.32].entries()) {
       const perpendicular = freightAngle + Math.PI / 2;
       const origin = {
         x: center.x + Math.cos(perpendicular) * boundary.radiusX * offset,
         y: center.y + Math.sin(perpendicular) * boundary.radiusY * offset,
       };
       const span = Math.max(boundary.radiusX, boundary.radiusY) * 0.9;
-      addRoad(offset === 0 ? "main" : "secondary", [
+      addRoad(index === 1 ? "main" : "secondary", [
         {
           x: origin.x - Math.cos(freightAngle) * span,
           y: origin.y - Math.sin(freightAngle) * span,
@@ -566,14 +878,18 @@ function makeRoadNetwork(
       pointOnEllipse(boundary, coastAngle - Math.PI * 0.52 + (index / 16) * Math.PI * 1.04, 0.82),
     );
     addRoad("main", waterfront);
-    addRoad("main", [pointOnEllipse(boundary, coastAngle, 0.94), center]);
+    addRoad("main", [
+      pointOnEllipse(boundary, coastAngle, 0.94),
+      pointOnEllipse(boundary, coastAngle + rng.range(-0.12, 0.12), 0.18),
+    ]);
   }
 
   entranceAngles.forEach((angle, entranceIndex) => {
     const outer = pointOnEllipse(boundary, angle, 0.995);
     const approach = pointOnEllipse(boundary, angle + rng.range(-0.035, 0.035), 0.72);
     const inner = pointOnEllipse(boundary, angle + rng.range(-0.08, 0.08), 0.3);
-    addRoad("main", chaikinSmooth([outer, approach, inner, center], 1), entranceIndex);
+    const localHub = pointOnEllipse(boundary, angle + rng.range(-0.16, 0.16), 0.16);
+    addRoad("main", chaikinSmooth([outer, approach, inner, localHub], 1), entranceIndex);
   });
 
   return roads;
@@ -1053,6 +1369,67 @@ const TYPE_BUILDING_MODIFIERS: Record<CityType, Partial<Record<BuildingKind, num
   rural: { residential: 1.4, civic: 1.15, industrial: 0.7 },
 };
 
+const CIVIC_BUILDING_NAMES: Record<CityType, readonly string[]> = {
+  capital: [
+    "Assembly Hall",
+    "High Court",
+    "City Archive",
+    "Central Watch House",
+    "Public Baths",
+    "Civic Granary",
+  ],
+  trade: [
+    "Guildhall",
+    "Weigh House",
+    "Customs Office",
+    "Market Court",
+    "Caravan Office",
+    "Town Watch",
+  ],
+  port: [
+    "Harbourmaster's Office",
+    "Customs House",
+    "Dock Watch",
+    "Sailors' Chapel",
+    "Tide Hall",
+    "Rescue Station",
+  ],
+  fortress: [
+    "Garrison Hall",
+    "Armoury",
+    "Command House",
+    "Gate Watch",
+    "Infirmary",
+    "Supply Office",
+  ],
+  industrial: [
+    "Works Office",
+    "Safety Hall",
+    "Guild Registry",
+    "Fire Watch",
+    "Public Infirmary",
+    "Workers' Hall",
+  ],
+  rural: [
+    "Meeting Hall",
+    "Village Shrine",
+    "Common Granary",
+    "Well House",
+    "Parish House",
+    "Village Watch",
+  ],
+};
+
+function generatedBuildingName(kind: BuildingKind, cityType: CityType, count: number): string {
+  if (kind !== "civic") {
+    return `${kind[0]!.toUpperCase()}${kind.slice(1)} ${String(count).padStart(3, "0")}`;
+  }
+  const names = CIVIC_BUILDING_NAMES[cityType];
+  const baseName = names[(count - 1) % names.length]!;
+  const cycle = Math.floor((count - 1) / names.length);
+  return cycle === 0 ? baseName : `${baseName} ${cycle + 1}`;
+}
+
 function chooseBuildingKind(
   rng: SeededRandom,
   districtKind: DistrictKind,
@@ -1265,7 +1642,7 @@ function makeBuildings(
     }
     const building: CityBuilding = {
       id,
-      name: `${kind[0]!.toUpperCase()}${kind.slice(1)} ${String(kindCounters[kind]).padStart(3, "0")}`,
+      name: generatedBuildingName(kind, cityType, kindCounters[kind]),
       kind,
       x: rectangle.x,
       y: rectangle.y,

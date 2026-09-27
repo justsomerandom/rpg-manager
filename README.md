@@ -16,8 +16,8 @@ There is no server, account, telemetry, cloud sync, or multiplayer layer. A `Wor
 - **Characters:** a world roster with editable notes and values rendered from the saved character-sheet template.
 - **Index:** SQLite-backed searchable codex entries with categories, tags, full text, editing, deletion, and non-destructive migration from the former browser-storage format.
 - **Lore:** editable books and chapters with selection guards and confirmed deletion.
-- **World maps:** deterministic terrain generation, environmental layers, brush tools, grid/isometric views, cities, roads, safe source saves, and compiled presentation previews.
-- **City maps:** procedural settlement layouts, districts, roads, named buildings, editable geometry, and synchronized world-road approaches.
+- **World maps:** deterministic terrain generation, environmental layers, top-down brush tools, grids, cities, roads, safe source saves, and compiled presentation previews.
+- **City maps:** terrain-aware procedural layouts, connected top-down streets, districts, functional civic buildings, editable geometry, and synchronized world-road approaches.
 
 ## Architecture
 

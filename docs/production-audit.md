@@ -30,9 +30,9 @@ This pass evaluated the application against the intended GM outcomes described i
 ### Map and city reliability
 
 - Hardened saved-map normalization and legacy defaults against malformed dimensions, layers, coordinates, IDs, and oversized data.
-- Corrected grid/isometric coordinate and rendering defects, deterministic math edge cases, road routing, water placement, and city/road removal behavior.
+- Corrected map-coordinate and rendering defects, deterministic math edge cases, road routing, water placement, and city/road removal behavior.
 - Added dirty-state feedback, internal-navigation plus native-window close guards, compiled-preview invalidation, revision-aware saves, and recoverable preview-generation failures.
-- Bounded canvas pixel allocation and corrected compiled isometric rendering instead of storing a rotated top-down image.
+- Bounded canvas pixel allocation and corrected compiled-map rendering instead of storing a transformed source image.
 - Improved city-map placement, geometry editing, road/building removal, regeneration preservation, responsive layout, and save/error feedback.
 
 ### UI, accessibility, and maintainability

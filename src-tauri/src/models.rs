@@ -366,7 +366,16 @@ impl CityMap {
         }
         if !matches!(
             self.road_architecture.as_str(),
-            "ring" | "grid" | "radial" | "organic"
+            "organic"
+                | "grid"
+                | "radial"
+                | "ring"
+                | "medieval"
+                | "market"
+                | "axial"
+                | "garden"
+                | "canal"
+                | "terraced"
         ) {
             return Err("Unsupported road architecture".into());
         }
@@ -835,6 +844,11 @@ mod tests {
         };
         map.normalize_and_validate().unwrap();
         assert_eq!(map.road_theme, "elvish");
+
+        for architecture in ["medieval", "market", "axial", "garden", "canal", "terraced"] {
+            map.road_architecture = architecture.into();
+            map.normalize_and_validate().unwrap();
+        }
 
         map.roads[0].external_connection_index = Some(1);
         assert!(map.normalize_and_validate().is_err());

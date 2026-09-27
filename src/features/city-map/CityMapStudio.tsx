@@ -32,6 +32,8 @@ import {
   CITY_LAYOUT_OPTIONS,
   CITY_SIZE_OPTIONS,
   CITY_TYPE_OPTIONS,
+  cityLayoutAvailability,
+  cityTypeAvailability,
   deriveRecommendedCitySize,
   connectCityRoadNetwork,
   evaluateBuildingPlacement,
@@ -135,7 +137,13 @@ function configFromMap(map: CityMap, fallbackPopulation: number): CityGeneration
     rawLayout === "grid" ||
     rawLayout === "ring" ||
     rawLayout === "radial" ||
-    rawLayout === "organic"
+    rawLayout === "organic" ||
+    rawLayout === "medieval" ||
+    rawLayout === "market" ||
+    rawLayout === "axial" ||
+    rawLayout === "garden" ||
+    rawLayout === "canal" ||
+    rawLayout === "terraced"
       ? rawLayout
       : "organic";
   return {
@@ -1600,11 +1608,19 @@ export function CityMapStudio({
                       setPreviewStale(true);
                     }}
                   >
-                    {CITY_TYPE_OPTIONS.map((option) => (
-                      <option key={option.key} value={option.key}>
-                        {option.label}
-                      </option>
-                    ))}
+                    {CITY_TYPE_OPTIONS.map((option) => {
+                      const availability = cityTypeAvailability(option.key, environment);
+                      return (
+                        <option
+                          key={option.key}
+                          value={option.key}
+                          disabled={!availability.available && option.key !== config.cityType}
+                        >
+                          {option.label}
+                          {!availability.available ? ` — ${availability.reason}` : ""}
+                        </option>
+                      );
+                    })}
                   </select>
                   <span className="block font-normal leading-5 text-slate-400">
                     {
@@ -1612,6 +1628,12 @@ export function CityMapStudio({
                         ?.description
                     }
                   </span>
+                  {!cityTypeAvailability(config.cityType, environment).available && (
+                    <span className="block font-normal leading-5 text-amber-300">
+                      {cityTypeAvailability(config.cityType, environment).reason} Existing plans may
+                      keep this type, but new terrain-mismatched choices are unavailable.
+                    </span>
+                  )}
                 </label>
 
                 <div className="rounded-xl border border-earth-clay/35 bg-earth-clay/10 p-3 text-xs leading-5 text-earth-sand">
@@ -1642,11 +1664,19 @@ export function CityMapStudio({
                     value={config.layout}
                     onChange={(event) => updateConfig("layout", event.target.value as CityLayout)}
                   >
-                    {CITY_LAYOUT_OPTIONS.map((option) => (
-                      <option key={option.key} value={option.key}>
-                        {option.label}
-                      </option>
-                    ))}
+                    {CITY_LAYOUT_OPTIONS.map((option) => {
+                      const availability = cityLayoutAvailability(option.key, environment);
+                      return (
+                        <option
+                          key={option.key}
+                          value={option.key}
+                          disabled={!availability.available && option.key !== config.layout}
+                        >
+                          {option.label}
+                          {!availability.available ? ` — ${availability.reason}` : ""}
+                        </option>
+                      );
+                    })}
                   </select>
                   <span className="block font-normal leading-5 text-slate-400">
                     {
@@ -1654,6 +1684,11 @@ export function CityMapStudio({
                         ?.description
                     }
                   </span>
+                  {!cityLayoutAvailability(config.layout, environment).available && (
+                    <span className="block font-normal leading-5 text-amber-300">
+                      {cityLayoutAvailability(config.layout, environment).reason}
+                    </span>
+                  )}
                 </label>
 
                 <label className="block space-y-2 text-xs font-semibold text-slate-300">
