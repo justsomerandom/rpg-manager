@@ -16,7 +16,8 @@
     "lint": "eslint . --max-warnings 0 && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings",
     "format": "prettier --write . && cargo fmt --manifest-path src-tauri/Cargo.toml --all",
     "format:check": "prettier --check . && cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
-    "test": "cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked",
+    "test": "npm run test:frontend && cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked",
+    "test:frontend": "vitest run",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
     "preview": "vite preview",
     "tauri": "tauri"
@@ -43,7 +44,8 @@
     "tailwindcss": "^3.4.15",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.70.1",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^5.0.2"
   },
   "allowScripts": {
     "esbuild@0.28.1": true
