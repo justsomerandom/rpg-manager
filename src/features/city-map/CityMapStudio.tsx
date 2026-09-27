@@ -13,6 +13,7 @@ import {
   saveCityMap,
   type CityBuilding,
   type CityBuildingUse,
+  type CityDistrictUse,
   type CityEntrance,
   type CityEntitySource,
   type CityLayout,
@@ -31,6 +32,8 @@ import {
   CITY_SIZE_OPTIONS,
   CITY_TYPE_OPTIONS,
   deriveRecommendedCitySize,
+  connectCityRoadNetwork,
+  evaluateBuildingPlacement,
   generateCityPlan,
   recommendedCityLayout,
   recommendedLandmarkCount,
@@ -47,6 +50,7 @@ import {
   type CityRenderOptions,
   type CityViewMode,
 } from "./rendering";
+import type { CityGenerationWorkerRequest, CityGenerationWorkerResponse } from "./generator.worker";
 
 export type CityMapApproach = {
   worldRoadId: string;
@@ -64,11 +68,12 @@ type Props = {
   onSavingChange?: (saving: boolean) => void;
 };
 
-type CityTool = "select" | "pan" | "road" | "building";
+type CityTool = "select" | "pan" | "road" | "building" | "district";
 type StudioMode = "edit" | "presentation";
 type DragState =
   | { kind: "pan"; clientX: number; clientY: number }
   | { kind: "building"; id: string; snapshot: CityMap; historyRecorded: boolean }
+  | { kind: "district"; id: string; snapshot: CityMap; historyRecorded: boolean }
   | {
       kind: "road-point";
       roadId: string;
@@ -96,6 +101,16 @@ const BUILDING_USES: Array<{ key: CityBuildingUse; label: string; description: s
   { key: "industrial", label: "Industrial", description: "Workshops and production" },
   { key: "civic", label: "Civic", description: "Public institutions" },
   { key: "landmark", label: "Landmark", description: "Named campaign location" },
+];
+
+const DISTRICT_USES: Array<{ key: CityDistrictUse; label: string; color: string }> = [
+  { key: "civic", label: "Civic", color: "#c8a96b" },
+  { key: "commercial", label: "Commercial", color: "#d9985f" },
+  { key: "residential", label: "Residential", color: "#8eb69b" },
+  { key: "industrial", label: "Industrial", color: "#8e9892" },
+  { key: "harbor", label: "Harbor", color: "#6f9fa6" },
+  { key: "green", label: "Green", color: "#73a16f" },
+  { key: "mixed", label: "Mixed", color: "#a68fb0" },
 ];
 
 function randomId(prefix: string) {
@@ -255,6 +270,35 @@ function sourceForManual(): CityEntitySource {
   return "manual";
 }
 
+function generatePlanInWorker(request: CityGenerationWorkerRequest): Promise<CityMap> {
+  if (typeof Worker === "undefined") {
+    return Promise.resolve(
+      generateCityPlan(
+        request.city,
+        request.config,
+        request.lockedBuildings,
+        request.entrances,
+        request.terrain,
+      ),
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./generator.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    worker.onmessage = (event: MessageEvent<CityGenerationWorkerResponse>) => {
+      worker.terminate();
+      if (event.data.ok) resolve(event.data.map);
+      else reject(new Error(event.data.error));
+    };
+    worker.onerror = (event) => {
+      worker.terminate();
+      reject(new Error(event.message || "The city generator worker stopped unexpectedly."));
+    };
+    worker.postMessage(request);
+  });
+}
+
 export function CityMapStudio({
   worldId,
   city,
@@ -290,6 +334,8 @@ export function CityMapStudio({
   const [draftRoad, setDraftRoad] = useState<Array<{ x: number; y: number }>>([]);
   const [buildingName, setBuildingName] = useState(`${city.name} landmark`);
   const [buildingUse, setBuildingUse] = useState<CityBuildingUse>("landmark");
+  const [districtName, setDistrictName] = useState("New district");
+  const [districtUse, setDistrictUse] = useState<CityDistrictUse>("mixed");
   const [undoStack, setUndoStack] = useState<CityMap[]>([]);
   const [redoStack, setRedoStack] = useState<CityMap[]>([]);
   const [config, setConfig] = useState<CityGenerationConfig>(() => ({
@@ -311,6 +357,7 @@ export function CityMapStudio({
   const dragRef = useRef<DragState>(null);
   const roadDrawingRef = useRef(false);
   const draftRoadRef = useRef<Array<{ x: number; y: number }>>([]);
+  const inspectorSnapshotRef = useRef<CityMap | null>(null);
 
   const displayedMap = generatorOpen && previewMap ? previewMap : mapData;
   const previewActive = Boolean(generatorOpen && previewMap);
@@ -539,37 +586,32 @@ export function CityMapStudio({
     setGenerating(true);
     setError(null);
     setStatus("Generating roads, districts, and buildings…");
-    window.requestAnimationFrame(() => {
-      window.setTimeout(() => {
+    const locked = preserveLocked
+      ? (mapData?.buildings.filter((building) => building.locked || building.source === "manual") ??
+        [])
+      : [];
+    void generatePlanInWorker({
+      city,
+      config,
+      lockedBuildings: locked,
+      entrances: externalConnections.map((approach) => approach.angle),
+      terrain: environment,
+    })
+      .then((plan) => {
         if (generationJobRef.current !== job) return;
-        try {
-          const locked = preserveLocked
-            ? (mapData?.buildings.filter(
-                (building) => building.locked || building.source === "manual",
-              ) ?? [])
-            : [];
-          const generated = applyRoadTheme(
-            generateCityPlan(
-              city,
-              config,
-              locked,
-              externalConnections.map((approach) => approach.angle),
-              environment,
-            ),
-            (config.roadTheme ?? "western") as RoadTheme,
-          );
-          setPreviewMap(
-            normalizeCityMap(attachApproaches(generated, externalConnections), city.id),
-          );
-          setPreviewStale(false);
-          setStatus("Preview ready. Your saved draft has not changed.");
-        } catch (caught) {
+        const generated = applyRoadTheme(plan, (config.roadTheme ?? "western") as RoadTheme);
+        setPreviewMap(normalizeCityMap(attachApproaches(generated, externalConnections), city.id));
+        setPreviewStale(false);
+        setStatus("Preview ready. Your saved draft has not changed.");
+      })
+      .catch((caught) => {
+        if (generationJobRef.current === job) {
           setError(getErrorMessage(caught, "We couldn't generate this city preview."));
-        } finally {
-          if (generationJobRef.current === job) setGenerating(false);
         }
-      }, 0);
-    });
+      })
+      .finally(() => {
+        if (generationJobRef.current === job) setGenerating(false);
+      });
   };
 
   const applyPreview = () => {
@@ -643,7 +685,16 @@ export function CityMapStudio({
     const road = mapData.roads.find((candidate) => candidate.id === selection.id);
     if (!road || road.external_connection_id) return null;
     const threshold = 0.012 / Math.max(zoom, 0.6);
-    return road.points.find((candidate) => distance(candidate, point) <= threshold) ?? null;
+    const candidate =
+      road.points.find((roadPoint) => distance(roadPoint, point) <= threshold) ?? null;
+    if (!candidate) return null;
+    const belongsToLockedApproach = mapData.roads.some(
+      (other) =>
+        other.id !== road.id &&
+        Boolean(other.external_connection_id) &&
+        other.points.some((otherPoint) => distance(otherPoint, candidate) < 0.000002),
+    );
+    return belongsToLockedApproach ? null : candidate;
   };
 
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -668,6 +719,33 @@ export function CityMapStudio({
       setStatus("Draw a local street and release to normalize it.");
       return;
     }
+    if (activeTool === "district") {
+      const districtOption = DISTRICT_USES.find((option) => option.key === districtUse)!;
+      const districtId = randomId("district");
+      const radius = 0.09;
+      const district = {
+        id: districtId,
+        name: districtName.trim().slice(0, 120) || "New district",
+        kind: districtUse,
+        x: point.x,
+        y: point.y,
+        radius,
+        color: districtOption.color,
+        points: Array.from({ length: 20 }, (_, index) => ({
+          x: clamp(point.x + Math.cos((index / 20) * Math.PI * 2) * radius, 0.01, 0.99),
+          y: clamp(point.y + Math.sin((index / 20) * Math.PI * 2) * radius, 0.01, 0.99),
+        })),
+        source: sourceForManual(),
+        locked: true,
+      };
+      commitMap(
+        { ...mapData, districts: [...(mapData.districts ?? []), district] },
+        `${district.name} added.`,
+      );
+      setSelection({ kind: "district", id: district.id });
+      setActiveTool("select");
+      return;
+    }
     if (activeTool === "building") {
       const building: CityBuilding = {
         id: randomId("building"),
@@ -683,6 +761,12 @@ export function CityMapStudio({
         locked: true,
         role: buildingUse === "landmark" ? buildingName.trim().slice(0, 120) : undefined,
       };
+      const placement = evaluateBuildingPlacement(mapData, building);
+      if (!placement.valid) {
+        setStatus(placement.reason);
+        return;
+      }
+      building.district_id = placement.districtId;
       commitMap(
         { ...mapData, buildings: [...mapData.buildings, building] },
         `${building.name} placed.`,
@@ -707,6 +791,8 @@ export function CityMapStudio({
     setSelection(selected);
     if (hit?.kind === "building") {
       dragRef.current = { kind: "building", id: hit.id, snapshot: mapData, historyRecorded: false };
+    } else if (hit?.kind === "district") {
+      dragRef.current = { kind: "district", id: hit.id, snapshot: mapData, historyRecorded: false };
     }
   };
 
@@ -731,6 +817,14 @@ export function CityMapStudio({
       return;
     }
     if (drag?.kind === "building") {
+      const currentBuilding = mapData.buildings.find((building) => building.id === drag.id);
+      if (!currentBuilding) return;
+      const candidate = { ...currentBuilding, x: point.x, y: point.y };
+      const placement = evaluateBuildingPlacement(mapData, candidate, drag.id);
+      if (!placement.valid) {
+        setStatus(placement.reason);
+        return;
+      }
       dragRef.current = pushDragHistory(drag);
       setMapData((current) =>
         current
@@ -738,33 +832,79 @@ export function CityMapStudio({
               ...current,
               buildings: current.buildings.map((building) =>
                 building.id === drag.id
-                  ? { ...building, x: point.x, y: point.y, source: "manual", locked: true }
+                  ? {
+                      ...building,
+                      x: point.x,
+                      y: point.y,
+                      district_id: placement.districtId,
+                      source: "manual",
+                      locked: true,
+                    }
                   : building,
               ),
             }
           : current,
       );
       markDirty();
+    } else if (drag?.kind === "district") {
+      const currentDistrict = mapData.districts?.find((district) => district.id === drag.id);
+      if (!currentDistrict) return;
+      dragRef.current = pushDragHistory(drag);
+      const offsetX = point.x - currentDistrict.x;
+      const offsetY = point.y - currentDistrict.y;
+      setMapData((current) =>
+        current
+          ? {
+              ...current,
+              districts: current.districts?.map((district) =>
+                district.id === drag.id
+                  ? {
+                      ...district,
+                      x: point.x,
+                      y: point.y,
+                      points: district.points?.map((candidate) => ({
+                        x: clamp(candidate.x + offsetX, 0.01, 0.99),
+                        y: clamp(candidate.y + offsetY, 0.01, 0.99),
+                      })),
+                      source: "manual",
+                      locked: true,
+                    }
+                  : district,
+              ),
+            }
+          : current,
+      );
+      markDirty();
     } else if (drag?.kind === "road-point") {
+      const originalPoint = drag.snapshot.roads
+        .find((road) => road.id === drag.roadId)
+        ?.points.find((candidate) => candidate.id === drag.pointId);
+      if (!originalPoint) return;
       dragRef.current = pushDragHistory(drag);
       setMapData((current) =>
         current
           ? {
               ...current,
-              roads: current.roads.map((road) =>
-                road.id === drag.roadId
+              roads: current.roads.map((road) => {
+                const sharesNode = road.points.some(
+                  (candidate) =>
+                    (road.id === drag.roadId && candidate.id === drag.pointId) ||
+                    distance(candidate, originalPoint) < 0.000002,
+                );
+                return sharesNode
                   ? {
                       ...road,
                       source: "manual",
                       locked: true,
                       points: road.points.map((candidate) =>
-                        candidate.id === drag.pointId
+                        (road.id === drag.roadId && candidate.id === drag.pointId) ||
+                        distance(candidate, originalPoint) < 0.000002
                           ? { ...candidate, x: point.x, y: point.y }
                           : candidate,
                       ),
                     }
-                  : road,
-              ),
+                  : road;
+              }),
             }
           : current,
       );
@@ -801,8 +941,8 @@ export function CityMapStudio({
       })),
     };
     commitMap(
-      { ...mapData, roads: [...mapData.roads, road] },
-      "Freehand street normalized and added.",
+      { ...mapData, roads: connectCityRoadNetwork([...mapData.roads, road], road.id) },
+      "Freehand street connected and added.",
     );
     setSelection({ kind: "road", id: road.id });
     setActiveTool("select");
@@ -834,6 +974,89 @@ export function CityMapStudio({
     if (!mapData || !selection) return;
     commitMap(updater(mapData, selection), message);
     setSelection(selection);
+  };
+
+  const beginInspectorEdit = () => {
+    if (!mapData || inspectorSnapshotRef.current) return;
+    inspectorSnapshotRef.current = mapData;
+    remember(mapData);
+  };
+
+  const finishInspectorEdit = () => {
+    inspectorSnapshotRef.current = null;
+  };
+
+  const updateSelectedTransient = (updater: (map: CityMap, feature: CityFeatureRef) => CityMap) => {
+    if (!selection) return;
+    setMapData((current) => (current ? updater(current, selection) : current));
+    markDirty();
+  };
+
+  const addRoadControlPoint = () => {
+    if (!mapData || !selectedRoad || selectedRoad.external_connection_id) return;
+    let segmentIndex = 0;
+    let longest = 0;
+    for (let index = 1; index < selectedRoad.points.length; index += 1) {
+      const length = distance(selectedRoad.points[index - 1]!, selectedRoad.points[index]!);
+      if (length > longest) {
+        longest = length;
+        segmentIndex = index - 1;
+      }
+    }
+    const start = selectedRoad.points[segmentIndex]!;
+    const end = selectedRoad.points[segmentIndex + 1]!;
+    const inserted = {
+      id: randomId("point"),
+      x: (start.x + end.x) / 2,
+      y: (start.y + end.y) / 2,
+    };
+    updateSelected(
+      (map, feature) => ({
+        ...map,
+        roads: map.roads.map((road) =>
+          road.id === feature.id
+            ? {
+                ...road,
+                points: [
+                  ...road.points.slice(0, segmentIndex + 1),
+                  inserted,
+                  ...road.points.slice(segmentIndex + 1),
+                ],
+                source: "manual",
+                locked: true,
+              }
+            : road,
+        ),
+      }),
+      "Control point added to the road's longest segment.",
+    );
+  };
+
+  const removeRoadControlPoint = () => {
+    if (
+      !mapData ||
+      !selectedRoad ||
+      selectedRoad.external_connection_id ||
+      selectedRoad.points.length <= 2
+    )
+      return;
+    const centreIndex = Math.floor(selectedRoad.points.length / 2);
+    updateSelected(
+      (map, feature) => ({
+        ...map,
+        roads: map.roads.map((road) =>
+          road.id === feature.id
+            ? {
+                ...road,
+                points: road.points.filter((_, index) => index !== centreIndex),
+                source: "manual",
+                locked: true,
+              }
+            : road,
+        ),
+      }),
+      "One interior control point removed.",
+    );
   };
 
   const removeSelected = () => {
@@ -1049,6 +1272,7 @@ export function CityMapStudio({
               ["select", "⌁", "Select and move"],
               ["pan", "✥", "Pan map"],
               ["road", "⌇", "Draw road"],
+              ["district", "◯", "Place district"],
               ["building", "▣", "Place building"],
             ] as const
           ).map(([tool, icon, label]) => (
@@ -1061,9 +1285,10 @@ export function CityMapStudio({
               disabled={mode === "presentation" || viewMode === "isometric" || previewActive}
               onClick={() => {
                 setActiveTool(tool);
+                setSelection(null);
                 setGeneratorOpen(false);
                 setPreviewMap(null);
-                if (tool === "building") setInspectorOpen(true);
+                if (tool === "building" || tool === "district") setInspectorOpen(true);
               }}
               className={`flex min-h-12 w-full flex-col items-center justify-center rounded-xl text-[10px] transition ${activeTool === tool ? "bg-brand text-grove-950 shadow-lg" : "text-slate-300 hover:bg-grove-700 hover:text-white"}`}
             >
@@ -1108,7 +1333,9 @@ export function CityMapStudio({
                 cursor:
                   activeTool === "pan" || mode === "presentation"
                     ? "grab"
-                    : activeTool === "road" || activeTool === "building"
+                    : activeTool === "road" ||
+                        activeTool === "building" ||
+                        activeTool === "district"
                       ? "crosshair"
                       : "default",
               }}
@@ -1431,6 +1658,51 @@ export function CityMapStudio({
                   </p>
                 )}
               </section>
+            ) : activeTool === "district" && !selection ? (
+              <section className="space-y-4">
+                <div>
+                  <p className="section-label">District placement</p>
+                  <h3 className="mt-2 font-display text-xl font-semibold">Add a city district</h3>
+                  <p className="mt-2 text-xs leading-5 text-slate-400">
+                    Choose a use and click its centre on the top-down map. You can move and resize
+                    it afterward.
+                  </p>
+                </div>
+                <label className="block space-y-1.5 text-xs text-slate-300">
+                  District name
+                  <input
+                    className="input-field"
+                    maxLength={120}
+                    value={districtName}
+                    onChange={(event) => setDistrictName(event.target.value)}
+                  />
+                </label>
+                <label className="block space-y-1.5 text-xs text-slate-300">
+                  District use
+                  <select
+                    className="input-field"
+                    value={districtUse}
+                    onChange={(event) => setDistrictUse(event.target.value as CityDistrictUse)}
+                  >
+                    {DISTRICT_USES.map((item) => (
+                      <option key={item.key} value={item.key}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="status-info">
+                  Placement is armed. Click once to add the district; the tool then returns to
+                  Select.
+                </div>
+                <button
+                  type="button"
+                  className="secondary-button w-full"
+                  onClick={() => setActiveTool("select")}
+                >
+                  Cancel placement
+                </button>
+              </section>
             ) : activeTool === "building" && !selection ? (
               <section className="space-y-4">
                 <div>
@@ -1491,8 +1763,10 @@ export function CityMapStudio({
                   <input
                     className="input-field"
                     value={selectedBuilding.name}
+                    onFocus={beginInspectorEdit}
+                    onBlur={finishInspectorEdit}
                     onChange={(event) =>
-                      updateSelected((map, feature) => ({
+                      updateSelectedTransient((map, feature) => ({
                         ...map,
                         buildings: map.buildings.map((building) =>
                           building.id === feature.id
@@ -1542,8 +1816,10 @@ export function CityMapStudio({
                     className="input-field min-h-24 resize-y"
                     maxLength={120}
                     value={selectedBuilding.role ?? ""}
+                    onFocus={beginInspectorEdit}
+                    onBlur={finishInspectorEdit}
                     onChange={(event) =>
-                      updateSelected((map, feature) => ({
+                      updateSelectedTransient((map, feature) => ({
                         ...map,
                         buildings: map.buildings.map((building) =>
                           building.id === feature.id
@@ -1557,6 +1833,111 @@ export function CityMapStudio({
                         ),
                       }))
                     }
+                  />
+                </label>
+                {(
+                  [
+                    ["width", "Width", selectedBuilding.width ?? selectedBuilding.footprint],
+                    ["height", "Depth", selectedBuilding.height ?? selectedBuilding.footprint],
+                  ] as const
+                ).map(([field, label, value]) => (
+                  <label key={field} className="block space-y-2 text-xs text-slate-300">
+                    {label} <span className="float-right">{Math.round(value * 1_000)} m</span>
+                    <input
+                      className="w-full accent-emerald-500"
+                      type="range"
+                      min={0.004}
+                      max={0.065}
+                      step={0.001}
+                      value={value}
+                      onPointerDown={beginInspectorEdit}
+                      onPointerUp={finishInspectorEdit}
+                      onKeyDown={beginInspectorEdit}
+                      onBlur={finishInspectorEdit}
+                      onChange={(event) => {
+                        const nextValue = Number(event.target.value);
+                        updateSelectedTransient((map, feature) => {
+                          const current = map.buildings.find(
+                            (building) => building.id === feature.id,
+                          );
+                          if (!current) return map;
+                          const candidate = {
+                            ...current,
+                            [field]: nextValue,
+                            footprint: Math.max(
+                              field === "width" ? nextValue : (current.width ?? current.footprint),
+                              field === "height"
+                                ? nextValue
+                                : (current.height ?? current.footprint),
+                            ),
+                          };
+                          const placement = evaluateBuildingPlacement(map, candidate, current.id);
+                          if (!placement.valid) {
+                            setStatus(placement.reason);
+                            return map;
+                          }
+                          return {
+                            ...map,
+                            buildings: map.buildings.map((building) =>
+                              building.id === current.id
+                                ? {
+                                    ...candidate,
+                                    district_id: placement.districtId,
+                                    source: "manual",
+                                    locked: true,
+                                  }
+                                : building,
+                            ),
+                          };
+                        });
+                      }}
+                    />
+                  </label>
+                ))}
+                <label className="block space-y-2 text-xs text-slate-300">
+                  Rotation{" "}
+                  <span className="float-right">
+                    {Math.round(((selectedBuilding.rotation ?? 0) * 180) / Math.PI)}°
+                  </span>
+                  <input
+                    className="w-full accent-emerald-500"
+                    type="range"
+                    min={-Math.PI}
+                    max={Math.PI}
+                    step={0.05}
+                    value={selectedBuilding.rotation ?? 0}
+                    onPointerDown={beginInspectorEdit}
+                    onPointerUp={finishInspectorEdit}
+                    onKeyDown={beginInspectorEdit}
+                    onBlur={finishInspectorEdit}
+                    onChange={(event) => {
+                      const rotation = Number(event.target.value);
+                      updateSelectedTransient((map, feature) => {
+                        const current = map.buildings.find(
+                          (building) => building.id === feature.id,
+                        );
+                        if (!current) return map;
+                        const candidate = { ...current, rotation };
+                        const placement = evaluateBuildingPlacement(map, candidate, current.id);
+                        if (!placement.valid) {
+                          setStatus(placement.reason);
+                          return map;
+                        }
+                        return {
+                          ...map,
+                          buildings: map.buildings.map((building) =>
+                            building.id === current.id
+                              ? {
+                                  ...candidate,
+                                  district_id: placement.districtId,
+                                  source: "manual",
+                                  locked: true,
+                                }
+                              : building,
+                          ),
+                        };
+                      });
+                    }}
                   />
                 </label>
                 <button type="button" className="danger-button w-full" onClick={removeSelected}>
@@ -1575,8 +1956,10 @@ export function CityMapStudio({
                     className="input-field"
                     value={selectedRoad.name}
                     disabled={Boolean(selectedRoad.external_connection_id)}
+                    onFocus={beginInspectorEdit}
+                    onBlur={finishInspectorEdit}
                     onChange={(event) =>
-                      updateSelected((map, feature) => ({
+                      updateSelectedTransient((map, feature) => ({
                         ...map,
                         roads: map.roads.map((road) =>
                           road.id === feature.id
@@ -1623,6 +2006,27 @@ export function CityMapStudio({
                   Drag the visible nodes in top-down Edit mode. World-road approaches are locked to
                   their parent road.
                 </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={Boolean(selectedRoad.external_connection_id)}
+                    onClick={addRoadControlPoint}
+                  >
+                    Add control point
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={
+                      Boolean(selectedRoad.external_connection_id) ||
+                      selectedRoad.points.length <= 2
+                    }
+                    onClick={removeRoadControlPoint}
+                  >
+                    Remove middle point
+                  </button>
+                </div>
                 <button
                   type="button"
                   className="danger-button w-full"
@@ -1645,8 +2049,10 @@ export function CityMapStudio({
                   <input
                     className="input-field"
                     value={selectedDistrict.name}
+                    onFocus={beginInspectorEdit}
+                    onBlur={finishInspectorEdit}
                     onChange={(event) =>
-                      updateSelected((map, feature) => ({
+                      updateSelectedTransient((map, feature) => ({
                         ...map,
                         districts: map.districts?.map((district) =>
                           district.id === feature.id
@@ -1660,6 +2066,98 @@ export function CityMapStudio({
                         ),
                       }))
                     }
+                  />
+                </label>
+                <label className="block space-y-1.5 text-xs text-slate-300">
+                  District use
+                  <select
+                    className="input-field"
+                    value={selectedDistrict.kind}
+                    onChange={(event) => {
+                      const kind = event.target.value as CityDistrictUse;
+                      const color = DISTRICT_USES.find((item) => item.key === kind)?.color;
+                      updateSelected((map, feature) => ({
+                        ...map,
+                        districts: map.districts?.map((district) =>
+                          district.id === feature.id
+                            ? {
+                                ...district,
+                                kind,
+                                color: color ?? district.color,
+                                source: "manual",
+                                locked: true,
+                              }
+                            : district,
+                        ),
+                      }));
+                    }}
+                  >
+                    {DISTRICT_USES.map((item) => (
+                      <option key={item.key} value={item.key}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block space-y-1.5 text-xs text-slate-300">
+                  Map color
+                  <input
+                    className="h-11 w-full rounded-lg border border-grove-600 bg-grove-950 p-1"
+                    type="color"
+                    value={selectedDistrict.color}
+                    onFocus={beginInspectorEdit}
+                    onBlur={finishInspectorEdit}
+                    onChange={(event) =>
+                      updateSelectedTransient((map, feature) => ({
+                        ...map,
+                        districts: map.districts?.map((district) =>
+                          district.id === feature.id
+                            ? {
+                                ...district,
+                                color: event.target.value,
+                                source: "manual",
+                                locked: true,
+                              }
+                            : district,
+                        ),
+                      }))
+                    }
+                  />
+                </label>
+                <label className="block space-y-2 text-xs text-slate-300">
+                  Radius{" "}
+                  <span className="float-right">{Math.round(selectedDistrict.radius * 100)}%</span>
+                  <input
+                    className="w-full accent-emerald-500"
+                    type="range"
+                    min={0.03}
+                    max={0.3}
+                    step={0.005}
+                    value={selectedDistrict.radius}
+                    onPointerDown={beginInspectorEdit}
+                    onPointerUp={finishInspectorEdit}
+                    onKeyDown={beginInspectorEdit}
+                    onBlur={finishInspectorEdit}
+                    onChange={(event) => {
+                      const radius = Number(event.target.value);
+                      updateSelectedTransient((map, feature) => ({
+                        ...map,
+                        districts: map.districts?.map((district) => {
+                          if (district.id !== feature.id) return district;
+                          const scale = radius / Math.max(0.001, district.radius);
+                          return {
+                            ...district,
+                            radius,
+                            points: district.points?.map((point) => ({
+                              x: clamp(district.x + (point.x - district.x) * scale, 0.01, 0.99),
+                              y: clamp(district.y + (point.y - district.y) * scale, 0.01, 0.99),
+                            })),
+                            source: "manual",
+                            locked: true,
+                          };
+                        }),
+                      }));
+                    }}
                   />
                 </label>
                 <p className="text-xs leading-5 text-slate-400">

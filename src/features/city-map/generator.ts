@@ -16,6 +16,7 @@ import {
   chaikinSmooth,
   clamp,
   distance,
+  distancePointToSegment,
   distanceSegmentToRectangle,
   hashParts,
   pointOnEllipse,
@@ -660,6 +661,118 @@ export function planarizeRoadNetwork(roads: readonly RoadDraft[]): RoadDraft[] {
     }
     return { ...road, points };
   });
+}
+
+function nearestPointOnSegment(point: Point, a: Point, b: Point): Point {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared <= Number.EPSILON) return a;
+  const amount = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared);
+  return { x: a.x + dx * amount, y: a.y + dy * amount };
+}
+
+export function connectCityRoadNetwork(
+  roads: readonly CityRoad[],
+  targetRoadId: string,
+): CityRoad[] {
+  const target = roads.find((road) => road.id === targetRoadId);
+  if (!target || target.points.length < 2) return [...roads];
+  const snappedPoints = target.points.map((point) => ({ x: point.x, y: point.y }));
+  for (const endpointIndex of [0, snappedPoints.length - 1]) {
+    const endpoint = snappedPoints[endpointIndex]!;
+    let nearest: Point | null = null;
+    let nearestDistance = 0.025;
+    for (const road of roads) {
+      if (road.id === targetRoadId) continue;
+      for (let index = 1; index < road.points.length; index += 1) {
+        const a = road.points[index - 1]!;
+        const b = road.points[index]!;
+        const candidateDistance = distancePointToSegment(endpoint, a, b);
+        if (candidateDistance >= nearestDistance) continue;
+        nearestDistance = candidateDistance;
+        nearest = nearestPointOnSegment(endpoint, a, b);
+      }
+    }
+    if (nearest) snappedPoints[endpointIndex] = nearest;
+  }
+
+  const drafts: RoadDraft[] = roads.map((road) => ({
+    id: road.id,
+    name: road.name,
+    importance: road.importance,
+    tier: road.tier ?? 2,
+    externalConnectionIndex: road.external_connection_index ?? undefined,
+    points:
+      road.id === targetRoadId
+        ? snappedPoints
+        : road.points.map((point) => ({ x: point.x, y: point.y })),
+  }));
+  const connected = planarizeRoadNetwork(drafts);
+  return connected.map((draft, roadIndex) => ({
+    ...roads[roadIndex]!,
+    points: draft.points.map((point, pointIndex) => ({
+      id: stableCityRoadPointId(draft.id, pointIndex),
+      x: point.x,
+      y: point.y,
+    })),
+  }));
+}
+
+export type BuildingPlacementResult =
+  { valid: true; districtId?: string } | { valid: false; reason: string };
+
+export function evaluateBuildingPlacement(
+  map: CityMap,
+  candidate: CityBuilding,
+  ignoreBuildingId?: string,
+): BuildingPlacementResult {
+  const rectangle = rectangleForBuilding(candidate);
+  if (!rectangle) return { valid: false, reason: "The building dimensions are invalid." };
+  const boundary = cityBoundary(map.size_label, map.scale ?? 1, map.city_type ?? "trade");
+  if (!rectangleInsideEllipse(rectangle, boundary, 0.005)) {
+    return { valid: false, reason: "Buildings must stay inside the settlement boundary." };
+  }
+  const { spatialIndex } = indexRoadSegments(
+    map.roads.map((road) => ({
+      id: road.id,
+      name: road.name,
+      importance: road.importance,
+      tier: road.tier ?? 2,
+      points: road.points,
+    })),
+  );
+  if (!clearsRoads(rectangle, spatialIndex)) {
+    return { valid: false, reason: "That footprint overlaps a road corridor." };
+  }
+  for (const building of map.buildings) {
+    if (building.id === ignoreBuildingId) continue;
+    const other = rectangleForBuilding(building);
+    if (other && rectanglesOverlap(rectangle, other, 0.0014)) {
+      return { valid: false, reason: `That footprint overlaps ${building.name}.` };
+    }
+  }
+  if (map.terrain?.coastal && Number.isFinite(map.terrain.coast_angle)) {
+    const coastX = Math.cos(map.terrain.coast_angle!);
+    const coastY = Math.sin(map.terrain.coast_angle!);
+    const normalizedX = (rectangle.x - boundary.x) / boundary.radiusX;
+    const normalizedY = (rectangle.y - boundary.y) / boundary.radiusY;
+    if (normalizedX * coastX + normalizedY * coastY > 0.82) {
+      return { valid: false, reason: "Buildings cannot be placed in the water." };
+    }
+  }
+  const point = { x: rectangle.x, y: rectangle.y };
+  const district = map.districts?.find((item) => {
+    const polygon =
+      item.points && item.points.length >= 3
+        ? item.points
+        : Array.from({ length: 24 }, (_, index) => ({
+            x: item.x + Math.cos((index / 24) * TAU) * item.radius,
+            y: item.y + Math.sin((index / 24) * TAU) * item.radius,
+          }));
+    return polygonContainsPoint(point, polygon);
+  });
+  return { valid: true, districtId: district?.id };
 }
 
 type WeightedKind = readonly [DistrictKind, number];
