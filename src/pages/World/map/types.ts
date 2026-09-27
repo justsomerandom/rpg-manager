@@ -35,7 +35,6 @@ export type Biome =
   | "volcanic_forest"
   | "snow";
 
-export type ViewMode = "iso" | "grid";
 export type ToolGroup = "general" | "relief" | "biome" | "roads" | "locations";
 export type BiomeToolMode = "palette" | "moisture" | "temperature" | "vegetation";
 export type ClimateTarget = "moisture" | "temperature" | "vegetation";
@@ -66,10 +65,7 @@ export type MapStateExtended = MapState & {
   temperature: number[];
   vegetation: number[];
   compiled_grid?: string;
-  compiled_iso?: string;
   compiled_updated_at?: number;
 };
 
 export type OverlayMode = "biomes" | "relief" | "temperature" | "vegetation";
-
-export type CompiledRenders = { grid: string; iso: string };

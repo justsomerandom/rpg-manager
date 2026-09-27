@@ -250,7 +250,6 @@ export function ensureExtendedMap(map: MapState): MapStateExtended {
     cities,
     roads,
     compiled_grid: compiledImage(extended.compiled_grid),
-    compiled_iso: compiledImage(extended.compiled_iso),
     compiled_updated_at: Number.isFinite(extended.compiled_updated_at)
       ? extended.compiled_updated_at
       : undefined,

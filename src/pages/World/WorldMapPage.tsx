@@ -30,7 +30,6 @@ import {
 import {
   Biome,
   BiomeToolMode,
-  CompiledRenders,
   MapStateExtended,
   NetworkAnchor,
   OverlayMode,
@@ -38,7 +37,6 @@ import {
   PixelPoint,
   PrimaryAction,
   ToolGroup,
-  ViewMode,
 } from "./map/types";
 import { clamp, lerp, pseudoRandom, randomId } from "./map/math";
 import {
@@ -399,171 +397,10 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
   return canvas.toDataURL("image/png");
 }
 
-async function drawCompiledIso(map: MapStateExtended, topDownDataUrl: string): Promise<string> {
-  const source = await loadIcon(topDownDataUrl);
-  if (!source.naturalWidth || !source.naturalHeight) return "";
-  const diagonal = Math.ceil(Math.hypot(source.naturalWidth, source.naturalHeight));
-  const logicalWidth = Math.max(960, diagonal + 140);
-  const logicalHeight = Math.max(720, Math.ceil(diagonal * 0.58) + 180);
-  const canvas = document.createElement("canvas");
-  const pixelRatio = canvasPixelRatio(logicalWidth, logicalHeight);
-  canvas.width = Math.floor(logicalWidth * pixelRatio);
-  canvas.height = Math.floor(logicalHeight * pixelRatio);
-  canvas.style.width = `${logicalWidth}px`;
-  canvas.style.height = `${logicalHeight}px`;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return "";
-  ctx.scale(pixelRatio, pixelRatio);
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  const width = logicalWidth;
-  const height = logicalHeight;
-
-  ctx.fillStyle = "#07130d";
-  ctx.fillRect(0, 0, width, height);
-  ctx.save();
-  ctx.translate(width / 2, height / 2 - 12);
-  ctx.scale(1, 0.56);
-  ctx.rotate(Math.PI / 4);
-  const sourceScale = Math.min((width - 160) / diagonal, (height - 170) / (diagonal * 0.56));
-  ctx.scale(sourceScale, sourceScale);
-  ctx.shadowColor = "rgba(0,0,0,0.72)";
-  ctx.shadowBlur = 38 / Math.max(sourceScale, 0.1);
-  ctx.shadowOffsetY = 28 / Math.max(sourceScale, 0.1);
-  ctx.drawImage(source, -source.naturalWidth / 2, -source.naturalHeight / 2);
-  ctx.restore();
-  applyFantasyOverlay(ctx, width, height);
-  applyNoiseOverlay(ctx, width, height, map.seed + 1, 0.08);
-  return canvas.toDataURL("image/png");
-}
-
-async function generateCompiledRenders(map: MapStateExtended): Promise<CompiledRenders> {
+async function generateCompiledRender(map: MapStateExtended): Promise<string> {
   const extended = ensureExtendedMap(map);
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-  const grid = await drawCompiledGrid(extended);
-  await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-  const iso = await drawCompiledIso(extended, grid);
-  return { grid, iso };
-}
-
-function drawIsometricMap(
-  canvas: HTMLCanvasElement | null,
-  map: MapStateExtended,
-  zoom: number,
-  pan: PanVector,
-  viewport: { width: number; height: number },
-  highlightCityId?: string | null,
-  roadDraftStart?: PixelPoint | null,
-  overlayMode: OverlayMode = "biomes",
-  overlayRanges?: {
-    relief?: { min: number; max: number };
-    temperature?: { min: number; max: number };
-    vegetation?: { min: number; max: number };
-  },
-  freehandDraft: readonly PixelPoint[] = [],
-) {
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const pixelRatio = canvasPixelRatio(viewport.width, viewport.height);
-  canvas.width = viewport.width * pixelRatio;
-  canvas.height = viewport.height * pixelRatio;
-  canvas.style.width = `${viewport.width}px`;
-  canvas.style.height = `${viewport.height}px`;
-  ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  ctx.clearRect(0, 0, viewport.width, viewport.height);
-
-  const tileWidth = TILE_BASE * zoom;
-  const tileHeight = tileWidth / 2;
-  const originX = viewport.width / 2 + pan.x;
-  const originY = viewport.height / 2 - tileHeight / 2 + pan.y;
-  const sumCenter = (map.width - 1 + map.height - 1) / 2;
-
-  for (let y = 0; y < map.height; y += 1) {
-    for (let x = 0; x < map.width; x += 1) {
-      const idx = y * map.width + x;
-      const biome = computeBiome(map, idx);
-      const color = BIOME_COLORS[biome];
-      const isoX = (x + y - sumCenter) * (tileWidth / 2) + originX;
-      const isoY = (y - x) * (tileHeight / 2) + originY;
-      ctx.beginPath();
-      ctx.moveTo(isoX, isoY);
-      ctx.lineTo(isoX + tileWidth / 2, isoY + tileHeight / 2);
-      ctx.lineTo(isoX, isoY + tileHeight);
-      ctx.lineTo(isoX - tileWidth / 2, isoY + tileHeight / 2);
-      ctx.closePath();
-      const baseColor = `rgb(${color[0]},${color[1]},${color[2]})`;
-      ctx.fillStyle = baseColor;
-      ctx.fill();
-
-      if (overlayMode !== "biomes" && overlayRanges) {
-        let overlay: string | null = null;
-        if (overlayMode === "relief" && overlayRanges.relief) {
-          overlay = reliefOverlayColor(map, map.relief[idx], overlayRanges.relief);
-        } else if (overlayMode === "temperature" && overlayRanges.temperature) {
-          overlay = temperatureOverlayColor(map.temperature[idx], overlayRanges.temperature);
-        } else if (overlayMode === "vegetation" && overlayRanges.vegetation) {
-          overlay = vegetationOverlayColor(map.vegetation[idx], overlayRanges.vegetation);
-        }
-        if (overlay) {
-          ctx.save();
-          ctx.fillStyle = overlay;
-          ctx.fill();
-          ctx.restore();
-        }
-      }
-      ctx.strokeStyle = "rgba(8,25,19,0.35)";
-      ctx.stroke();
-    }
-  }
-
-  const drawRoad = (points: readonly PixelPoint[], stroke: string) => {
-    if (points.length === 0) return;
-    ctx.beginPath();
-    const first = points[0];
-    const firstGridX = first.x * map.width - 0.5;
-    const firstGridY = first.y * map.height - 0.5;
-    const startX = (firstGridX + firstGridY - sumCenter) * (tileWidth / 2) + originX;
-    const startY = (firstGridY - firstGridX) * (tileHeight / 2) + originY + tileHeight / 2;
-    ctx.moveTo(startX, startY);
-    for (let i = 1; i < points.length; i += 1) {
-      const point = points[i];
-      const gridX = point.x * map.width - 0.5;
-      const gridY = point.y * map.height - 0.5;
-      const px = (gridX + gridY - sumCenter) * (tileWidth / 2) + originX;
-      const py = (gridY - gridX) * (tileHeight / 2) + originY + tileHeight / 2;
-      ctx.lineTo(px, py);
-    }
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = stroke;
-    ctx.stroke();
-  };
-
-  map.roads.forEach((road) => drawRoad(road.points, "rgba(224,196,128,0.85)"));
-  if (freehandDraft.length > 1) {
-    ctx.save();
-    ctx.setLineDash([6, 5]);
-    drawRoad(freehandDraft, "rgba(255,214,142,0.95)");
-    ctx.restore();
-  }
-  if (roadDraftStart) {
-    drawRoad([roadDraftStart], "rgba(255,198,109,0.8)");
-  }
-
-  map.cities.forEach((city) => {
-    const gridX = city.x * map.width - 0.5;
-    const gridY = city.y * map.height - 0.5;
-    const isoX = (gridX + gridY - sumCenter) * (tileWidth / 2) + originX;
-    const isoY = (gridY - gridX) * (tileHeight / 2) + originY + tileHeight / 2;
-    ctx.fillStyle = city.id === highlightCityId ? "#ffe066" : "#e3f2db";
-    ctx.beginPath();
-    ctx.arc(isoX, isoY, 7, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.font = "12px 'Space Grotesk', sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(city.name, isoX, isoY - 12);
-  });
+  return drawCompiledGrid(extended);
 }
 
 function drawGridMap(
@@ -693,11 +530,10 @@ function drawGridMap(
   });
 }
 function invalidateCompiledMap(map: MapStateExtended): MapStateExtended {
-  if (!map.compiled_grid && !map.compiled_iso && !map.compiled_updated_at) return map;
+  if (!map.compiled_grid && !map.compiled_updated_at) return map;
   return {
     ...map,
     compiled_grid: undefined,
-    compiled_iso: undefined,
     compiled_updated_at: undefined,
   };
 }
@@ -1089,7 +925,6 @@ export function WorldMapPage() {
   const [toolGroup, setToolGroup] = useState<ToolGroup>("general");
   const [reliefAction, setReliefAction] = useState<"raise" | "lower">("raise");
   const [locationAction, setLocationAction] = useState<PrimaryAction>("navigate");
-  const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [draftCityName, setDraftCityName] = useState("New City");
   const [draftLocationKind, setDraftLocationKind] = useState<MapLocationKind>("settlement");
   const [selectedCityName, setSelectedCityName] = useState("");
@@ -1237,7 +1072,7 @@ export function WorldMapPage() {
       compiledPreferenceRef.current = false;
       return;
     }
-    const available = !!(mapState.compiled_grid && mapState.compiled_iso);
+    const available = Boolean(mapState.compiled_grid);
     if (!available) {
       setCompiledView(false);
       compiledPreferenceRef.current = false;
@@ -1347,33 +1182,18 @@ export function WorldMapPage() {
             temperature: temperatureRange,
             vegetation: vegetationRange,
           };
-    if (viewMode === "iso") {
-      drawIsometricMap(
-        canvas,
-        mapState,
-        zoom,
-        panOffset,
-        viewportSize,
-        selectedCity?.id,
-        roadDraftStart ?? undefined,
-        overlayMode,
-        overlayRanges,
-        freehandDraft,
-      );
-    } else {
-      drawGridMap(
-        canvas,
-        mapState,
-        zoom,
-        panOffset,
-        viewportSize,
-        selectedCity?.id,
-        roadDraftStart ?? undefined,
-        overlayMode,
-        overlayRanges,
-        freehandDraft,
-      );
-    }
+    drawGridMap(
+      canvas,
+      mapState,
+      zoom,
+      panOffset,
+      viewportSize,
+      selectedCity?.id,
+      roadDraftStart ?? undefined,
+      overlayMode,
+      overlayRanges,
+      freehandDraft,
+    );
   }, [
     mapState,
     zoom,
@@ -1382,7 +1202,6 @@ export function WorldMapPage() {
     selectedCity,
     roadDraftStart,
     freehandDraft,
-    viewMode,
     overlayMode,
     compiledView,
   ]);
@@ -1398,12 +1217,11 @@ export function WorldMapPage() {
       avgTemperature,
     };
   }, [mapState]);
-  const compiledAvailable = !!(mapState?.compiled_grid && mapState?.compiled_iso);
+  const compiledAvailable = Boolean(mapState?.compiled_grid);
   const compiledTimestamp = mapState?.compiled_updated_at
     ? new Date(mapState.compiled_updated_at).toLocaleString()
     : null;
-  const compiledImage =
-    viewMode === "iso" ? (mapState?.compiled_iso ?? null) : (mapState?.compiled_grid ?? null);
+  const compiledImage = mapState?.compiled_grid ?? null;
   const compiledTransform = useMemo(
     () => `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
     [panOffset.x, panOffset.y, zoom],
@@ -1545,8 +1363,8 @@ export function WorldMapPage() {
     setPreviewWarning(null);
     setStatusMessage("Rendering presentation views…");
     try {
-      const compiled = await generateCompiledRenders(snapshot);
-      if (!compiled.grid || !compiled.iso) throw new Error("The renderer returned an empty image.");
+      const compiled = await generateCompiledRender(snapshot);
+      if (!compiled) throw new Error("The renderer returned an empty image.");
       if (activeWorldIdRef.current !== compileWorldId || revisionRef.current !== compileRevision) {
         if (activeWorldIdRef.current !== compileWorldId) return;
         setPreviewWarning(
@@ -1559,8 +1377,7 @@ export function WorldMapPage() {
         current
           ? {
               ...current,
-              compiled_grid: compiled.grid,
-              compiled_iso: compiled.iso,
+              compiled_grid: compiled,
               compiled_updated_at: Date.now(),
             }
           : current,
@@ -1611,41 +1428,18 @@ export function WorldMapPage() {
       const rect = canvasRef.current.getBoundingClientRect();
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
-      if (viewMode === "grid") {
-        const cellSize = TILE_BASE * zoom;
-        const gridX = (localX - panOffset.x) / cellSize;
-        const gridY = (localY - panOffset.y) / cellSize;
-        if (gridX < 0 || gridY < 0 || gridX > mapState.width || gridY > mapState.height) {
-          return null;
-        }
-        return {
-          x: clamp(gridX / mapState.width, 0.5 / mapState.width, 1 - 0.5 / mapState.width),
-          y: clamp(gridY / mapState.height, 0.5 / mapState.height, 1 - 0.5 / mapState.height),
-        };
-      }
-      const tileWidth = TILE_BASE * zoom;
-      const tileHeight = tileWidth / 2;
-      const originX = viewportSize.width / 2 + panOffset.x;
-      const originY = viewportSize.height / 2 - tileHeight / 2 + panOffset.y;
-      const dx = localX - originX;
-      const dy = localY - originY - tileHeight / 2;
-      const sumCenter = (mapState.width - 1 + mapState.height - 1) / 2;
-      const gridX = sumCenter / 2 + dx / tileWidth - dy / tileHeight;
-      const gridY = sumCenter / 2 + dx / tileWidth + dy / tileHeight;
-      if (
-        gridX < -0.5 ||
-        gridY < -0.5 ||
-        gridX > mapState.width - 0.5 ||
-        gridY > mapState.height - 0.5
-      ) {
+      const cellSize = TILE_BASE * zoom;
+      const gridX = (localX - panOffset.x) / cellSize;
+      const gridY = (localY - panOffset.y) / cellSize;
+      if (gridX < 0 || gridY < 0 || gridX > mapState.width || gridY > mapState.height) {
         return null;
       }
       return {
-        x: clamp((gridX + 0.5) / mapState.width, 0.5 / mapState.width, 1 - 0.5 / mapState.width),
-        y: clamp((gridY + 0.5) / mapState.height, 0.5 / mapState.height, 1 - 0.5 / mapState.height),
+        x: clamp(gridX / mapState.width, 0.5 / mapState.width, 1 - 0.5 / mapState.width),
+        y: clamp(gridY / mapState.height, 0.5 / mapState.height, 1 - 0.5 / mapState.height),
       };
     },
-    [mapState, viewMode, zoom, panOffset, viewportSize],
+    [mapState, zoom, panOffset],
   );
 
   const handleBrush = useCallback(
@@ -2008,10 +1802,6 @@ export function WorldMapPage() {
     else deleteRoad(action.roadId);
   };
 
-  const handleViewToggle = () => {
-    setViewMode((prev) => (prev === "iso" ? "grid" : "iso"));
-  };
-
   const handleSidebarToggle = () => {
     setSidebarOpen((prev) => !prev);
   };
@@ -2068,7 +1858,7 @@ export function WorldMapPage() {
             }}
             className="primary-button flex-1 disabled:opacity-50"
             type="button"
-            disabled={!compiledAvailable || !mapState?.compiled_iso || !mapState?.compiled_grid}
+            disabled={!compiledAvailable || !mapState?.compiled_grid}
           >
             {compiledAvailable ? "View presentation" : "Render presentation first"}
           </button>
@@ -2087,7 +1877,7 @@ export function WorldMapPage() {
         <p className="text-[11px] text-earth-sand/60">
           {compiledAvailable
             ? `Last baked: ${compiledTimestamp ?? "unknown"}`
-            : "Render creates top-down and isometric previews; Save persists them."}
+            : "Render creates a top-down presentation; Save persists it."}
         </p>
       </section>
       <section className="space-y-2 text-sm">
@@ -2105,16 +1895,6 @@ export function WorldMapPage() {
             onChange={(event) => handleWaterChange(Number(event.target.value))}
           />
         </label>
-        <div className="flex items-center justify-between gap-4">
-          <span>View</span>
-          <button
-            type="button"
-            onClick={handleViewToggle}
-            className="px-3 py-1 rounded border border-brand/50 text-xs"
-          >
-            Switch to {viewMode === "iso" ? "Top-down" : "Isometric"}
-          </button>
-        </div>
         <label className="flex items-center justify-between gap-4">
           <span>Overlay</span>
           <select
@@ -2646,10 +2426,8 @@ export function WorldMapPage() {
     <div className="space-y-4 text-sm">
       <section className="space-y-2">
         <p className="text-xs uppercase tracking-[0.3em] text-earth-sand/60">Compiled view</p>
-        <p className="text-earth-sand/80">
-          Using baked top-down / isometric renders with grading and noise.
-        </p>
-        <div className="flex gap-2">
+        <p className="text-earth-sand/80">Using a baked top-down render with grading and noise.</p>
+        <div>
           <button
             type="button"
             onClick={() => setCompiledView(false)}
@@ -2657,14 +2435,11 @@ export function WorldMapPage() {
           >
             Return to editor
           </button>
-          <button type="button" onClick={handleViewToggle} className="primary-button flex-1">
-            Switch to {viewMode === "iso" ? "Top-down" : "Isometric"}
-          </button>
         </div>
         <p className="text-[11px] text-earth-sand/60">
           {compiledTimestamp
             ? `Last baked: ${compiledTimestamp}`
-            : "Render presentation to create both views, then save to persist them."}
+            : "Render the presentation, then save to persist it."}
         </p>
       </section>
       <section className="space-y-2">
@@ -2792,28 +2567,6 @@ export function WorldMapPage() {
               className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${compiledView ? "bg-brand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
             >
               Presentation
-            </button>
-          </div>
-          <div
-            className="hidden rounded-xl border border-grove-600 bg-grove-950/70 p-1 lg:flex"
-            role="group"
-            aria-label="Map projection"
-          >
-            <button
-              type="button"
-              aria-pressed={viewMode === "grid"}
-              onClick={() => setViewMode("grid")}
-              className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${viewMode === "grid" ? "bg-earth-sand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
-            >
-              Top-down
-            </button>
-            <button
-              type="button"
-              aria-pressed={viewMode === "iso"}
-              onClick={() => setViewMode("iso")}
-              className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${viewMode === "iso" ? "bg-earth-sand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
-            >
-              Isometric
             </button>
           </div>
           <button
@@ -2983,7 +2736,7 @@ export function WorldMapPage() {
                     ? "Presentation preview — navigation only"
                     : `Primary: ${PRIMARY_ACTION_LABEL[primaryAction]}  |  Secondary: Pan`}
                 </p>
-                <p>View: {viewMode === "iso" ? "Isometric" : "Top-down"}</p>
+                <p>View: Top-down</p>
                 {compiledView && compiledTimestamp && <p>Last baked: {compiledTimestamp}</p>}
                 {roadDraftStart && <p>Road anchor: {roadDraftStart.label}</p>}
               </div>

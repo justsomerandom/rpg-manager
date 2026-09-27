@@ -111,8 +111,6 @@ pub struct MapState {
     #[serde(default)]
     pub compiled_grid: Option<String>,
     #[serde(default)]
-    pub compiled_iso: Option<String>,
-    #[serde(default)]
     pub compiled_updated_at: Option<i64>,
 }
 
@@ -201,7 +199,6 @@ impl MapState {
         }
 
         validate_compiled_image(self.compiled_grid.as_deref(), "Compiled grid")?;
-        validate_compiled_image(self.compiled_iso.as_deref(), "Compiled isometric map")?;
         if self.compiled_updated_at.is_some_and(|value| value < 0) {
             return Err("Compiled map timestamp cannot be negative".into());
         }
@@ -754,7 +751,6 @@ mod tests {
             temperature: vec![0.5; 64],
             vegetation: vec![0.5; 64],
             compiled_grid: None,
-            compiled_iso: None,
             compiled_updated_at: None,
         }
     }

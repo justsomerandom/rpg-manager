@@ -36,7 +36,6 @@ export type MapState = {
   temperature?: number[];
   vegetation?: number[];
   compiled_grid?: string | null;
-  compiled_iso?: string | null;
   compiled_updated_at?: number | null;
 };
 

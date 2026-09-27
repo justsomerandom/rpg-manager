@@ -1,7 +1,5 @@
 import type { CityBuilding, CityDistrict, CityMap } from "../../api/cityMap";
 
-export type CityViewMode = "topdown" | "isometric";
-
 export type CityLayerVisibility = {
   ground: boolean;
   districts: boolean;
@@ -43,16 +41,11 @@ export type CityEditorOverlayOptions = {
 };
 
 export type CityRenderOptions = {
-  viewMode?: CityViewMode;
   viewport?: CityViewport;
   layers?: Partial<CityLayerVisibility>;
   overlays?: CityEditorOverlayOptions;
   /** Background outside the mapped city. */
   background?: string;
-  /** Isometric y-axis compression. */
-  isometricSquash?: number;
-  /** Maximum isometric building extrusion in CSS pixels. Set to 0 for a flat view. */
-  maxBuildingExtrusion?: number;
   /** Resize the canvas backing bitmap to match the viewport and DPR. */
   resizeCanvas?: boolean;
   /** Clamp inverse-projected pointer coordinates to the city bounds. */
@@ -63,7 +56,6 @@ export type CityRenderOptions = {
 
 export type CityRenderStats = {
   contextAvailable: boolean;
-  viewMode: CityViewMode;
   viewportWidth: number;
   viewportHeight: number;
   dpr: number;
@@ -113,14 +105,12 @@ type Surface = {
 };
 
 type ViewTransform = {
-  mode: CityViewMode;
   width: number;
   height: number;
   centreX: number;
   centreY: number;
   scale: number;
   zoom: number;
-  squash: number;
 };
 
 type LabelCandidate = {
@@ -141,7 +131,6 @@ const DEFAULT_LAYERS: CityLayerVisibility = {
 };
 
 const FONT_STACK = 'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
-const SQRT_HALF = Math.SQRT1_2;
 const TAU = Math.PI * 2;
 
 const DISTRICT_COLORS: Record<string, string> = {
@@ -305,23 +294,13 @@ function resolveSurface(
   return { width, height, dpr };
 }
 
-function projectedLocal(point: Point, mode: CityViewMode, squash: number): Point {
-  if (mode === "topdown") return point;
-  return {
-    x: (point.x - point.y) * SQRT_HALF,
-    y: (point.x + point.y) * SQRT_HALF * squash,
-  };
-}
-
 function createTransform(
   surface: Surface,
   map: Pick<CityMap, "width" | "height">,
   options: CityRenderOptions,
 ): ViewTransform {
-  const mode = options.viewMode ?? "topdown";
   const width = safePositive(map.width, 1);
   const height = safePositive(map.height, 1);
-  const squash = clamp(finite(options.isometricSquash, 0.56), 0.3, 0.85);
   const zoom = clamp(safePositive(options.viewport?.zoom, 1), 0.2, 12);
   const padding = clamp(
     finite(
@@ -333,29 +312,14 @@ function createTransform(
   );
   const availableWidth = Math.max(1, surface.width - padding * 2);
   const availableHeight = Math.max(1, surface.height - padding * 2);
-  const corners = [
-    { x: -width / 2, y: -height / 2 },
-    { x: width / 2, y: -height / 2 },
-    { x: width / 2, y: height / 2 },
-    { x: -width / 2, y: height / 2 },
-  ].map((point) => projectedLocal(point, mode, squash));
-  const minX = Math.min(...corners.map((point) => point.x));
-  const maxX = Math.max(...corners.map((point) => point.x));
-  const minY = Math.min(...corners.map((point) => point.y));
-  const maxY = Math.max(...corners.map((point) => point.y));
-  const scale = Math.min(
-    availableWidth / Math.max(0.0001, maxX - minX),
-    availableHeight / Math.max(0.0001, maxY - minY),
-  );
+  const scale = Math.min(availableWidth / width, availableHeight / height);
   return {
-    mode,
     width,
     height,
     centreX: surface.width / 2 + finite(options.viewport?.panX, 0),
     centreY: surface.height / 2 + finite(options.viewport?.panY, 0),
     scale,
     zoom,
-    squash,
   };
 }
 
@@ -364,28 +328,19 @@ function cityToScreen(point: Point, transform: ViewTransform): Point {
     x: point.x * transform.width - transform.width / 2,
     y: point.y * transform.height - transform.height / 2,
   };
-  const projected = projectedLocal(local, transform.mode, transform.squash);
   const viewScale = transform.scale * transform.zoom;
   return {
-    x: transform.centreX + projected.x * viewScale,
-    y: transform.centreY + projected.y * viewScale,
+    x: transform.centreX + local.x * viewScale,
+    y: transform.centreY + local.y * viewScale,
   };
 }
 
 function screenToCity(point: Point, transform: ViewTransform): Point {
   const viewScale = Math.max(0.0001, transform.scale * transform.zoom);
-  const projected = {
+  const local = {
     x: (point.x - transform.centreX) / viewScale,
     y: (point.y - transform.centreY) / viewScale,
   };
-  let local = projected;
-  if (transform.mode === "isometric") {
-    const unsquashedY = projected.y / transform.squash;
-    local = {
-      x: (projected.x + unsquashedY) * SQRT_HALF,
-      y: (unsquashedY - projected.x) * SQRT_HALF,
-    };
-  }
   return {
     x: (local.x + transform.width / 2) / transform.width,
     y: (local.y + transform.height / 2) / transform.height,
@@ -924,21 +879,6 @@ function outsideViewport(points: ReadonlyArray<Point>, surface: Surface, margin 
   );
 }
 
-function elevationForBuilding(
-  building: CityBuilding,
-  kind: NormalizedBuildingKind,
-  transform: ViewTransform,
-  maximum: number,
-): number {
-  if (transform.mode !== "isometric" || maximum <= 0) return 0;
-  const dimensions = buildingDimensions(building);
-  const footprintPixels =
-    Math.sqrt(dimensions.width * dimensions.depth) * transform.scale * transform.zoom;
-  const kindFactor =
-    kind === "landmark" ? 1.05 : kind === "civic" ? 0.78 : kind === "industrial" ? 0.48 : 0.58;
-  return clamp(1.5 + footprintPixels * kindFactor, 1.5, maximum);
-}
-
 function drawBuildingDetail(
   context: CanvasRenderingContext2D,
   roof: ReadonlyArray<Point>,
@@ -1009,15 +949,11 @@ function drawBuildings(
   surface: Surface,
   transform: ViewTransform,
   labels: LabelCandidate[],
-  maxExtrusion: number,
 ): { rendered: number; culled: number } {
   const seed = normalizeSeed(map.seed);
   const buildings = map.buildings
     .filter((building) => Number.isFinite(building.x) && Number.isFinite(building.y))
     .slice();
-  if (transform.mode === "isometric") {
-    buildings.sort((first, second) => first.x + first.y - (second.x + second.y));
-  }
   let rendered = 0;
   let culled = 0;
   for (const building of buildings) {
@@ -1035,28 +971,11 @@ function drawBuildings(
       variation > 0.58 ? "#c0a276" : "#6f6250",
       0.08 + variation * 0.12,
     );
-    const elevation = elevationForBuilding(building, kind, transform, maxExtrusion);
-    const roof = elevation > 0 ? shifted(base, 0, -elevation) : base;
+    const roof = base;
 
-    polygonPath(
-      context,
-      shifted(base, elevation > 0 ? elevation * 0.5 : 1.3, elevation > 0 ? elevation * 0.72 : 1.8),
-    );
+    polygonPath(context, shifted(base, 1.3, 1.8));
     context.fillStyle = "rgba(35, 37, 30, 0.2)";
     context.fill();
-
-    if (elevation > 0) {
-      const baseCentre = polygonCentroid(base);
-      for (let index = 0; index < base.length; index += 1) {
-        const nextIndex = (index + 1) % base.length;
-        const midpointY = (base[index].y + base[nextIndex].y) / 2;
-        if (midpointY < baseCentre.y - 0.25) continue;
-        polygonPath(context, [base[index], base[nextIndex], roof[nextIndex], roof[index]]);
-        context.fillStyle =
-          index % 2 === 0 ? mixColor(color, "#383b35", 0.36) : mixColor(color, "#51483c", 0.27);
-        context.fill();
-      }
-    }
 
     polygonPath(context, roof);
     context.fillStyle = color;
@@ -1289,7 +1208,6 @@ function emptyStats(
 ): CityRenderStats {
   return {
     contextAvailable: false,
-    viewMode: options.viewMode ?? "topdown",
     viewportWidth: surface.width,
     viewportHeight: surface.height,
     dpr: surface.dpr,
@@ -1348,14 +1266,7 @@ export function drawCityMap(
   if (layers.districts) renderedDistricts = drawDistricts(context, map, transform, labels);
   if (layers.roads) renderedRoads = drawRoads(context, map, transform, labels);
   if (layers.buildings) {
-    const buildingResult = drawBuildings(
-      context,
-      map,
-      surface,
-      transform,
-      labels,
-      clamp(finite(options.maxBuildingExtrusion, 11), 0, 28),
-    );
+    const buildingResult = drawBuildings(context, map, surface, transform, labels);
     renderedBuildings = buildingResult.rendered;
     culledBuildings = buildingResult.culled;
   }
@@ -1367,7 +1278,6 @@ export function drawCityMap(
 
   return {
     contextAvailable: true,
-    viewMode: transform.mode,
     viewportWidth: surface.width,
     viewportHeight: surface.height,
     dpr: surface.dpr,

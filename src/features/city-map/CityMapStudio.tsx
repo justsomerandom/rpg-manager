@@ -49,7 +49,6 @@ import {
   type CityFeatureRef,
   type CityLayerVisibility,
   type CityRenderOptions,
-  type CityViewMode,
 } from "./rendering";
 import type { CityGenerationWorkerRequest, CityGenerationWorkerResponse } from "./generator.worker";
 
@@ -330,7 +329,6 @@ export function CityMapStudio({
   const [previewStale, setPreviewStale] = useState(false);
   const [preserveLocked, setPreserveLocked] = useState(true);
   const [mode, setMode] = useState<StudioMode>("edit");
-  const [viewMode, setViewMode] = useState<CityViewMode>("topdown");
   const [activeTool, setActiveTool] = useState<CityTool>("select");
   const [selection, setSelection] = useState<CityFeatureRef | null>(null);
   const [layers, setLayers] = useState<CityLayerVisibility>(DEFAULT_LAYERS);
@@ -367,13 +365,10 @@ export function CityMapStudio({
 
   const displayedMap = generatorOpen && previewMap ? previewMap : mapData;
   const previewActive = Boolean(generatorOpen && previewMap);
-  const editable = Boolean(
-    mapData && mode === "edit" && viewMode === "topdown" && !previewActive && !saving,
-  );
+  const editable = Boolean(mapData && mode === "edit" && !previewActive && !saving);
 
   const renderOptions = useMemo<CityRenderOptions>(
     () => ({
-      viewMode,
       viewport: {
         width: viewport.width,
         height: viewport.height,
@@ -393,7 +388,6 @@ export function CityMapStudio({
               draftRoad,
             }
           : undefined,
-      maxBuildingExtrusion: viewMode === "isometric" ? 10 : 0,
     }),
     [
       draftRoad,
@@ -403,7 +397,6 @@ export function CityMapStudio({
       pan.y,
       previewActive,
       selection,
-      viewMode,
       viewport.height,
       viewport.width,
       zoom,
@@ -583,12 +576,6 @@ export function CityMapStudio({
     return () => window.cancelAnimationFrame(frame);
   }, [displayedMap, renderOptions]);
 
-  const requestViewMode = (next: CityViewMode) => {
-    if (next === viewMode) return;
-    setRendering(true);
-    setViewMode(next);
-  };
-
   const cityPoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!displayedMap || !canvasRef.current) return null;
     const point = screenToCityPoint(
@@ -644,8 +631,9 @@ export function CityMapStudio({
   };
 
   const handleSave = async () => {
-    if (!mapData || !dirty || saving) return;
-    const snapshot = mapData;
+    const stagedPreview = previewActive && !previewStale ? previewMap : null;
+    const snapshot = stagedPreview ?? mapData;
+    if (!snapshot || saving || (!dirty && !stagedPreview)) return;
     const saveRevision = revisionRef.current;
     setSaving(true);
     setError(null);
@@ -653,8 +641,15 @@ export function CityMapStudio({
       const saved = await saveCityMap(worldId, city.id, snapshot);
       if (revisionRef.current === saveRevision) {
         setMapData(saved);
+        setPreviewMap(null);
+        setGeneratorOpen(false);
+        setPreviewStale(false);
         setDirty(false);
-        setStatus("City plan saved. The studio remains open.");
+        setStatus(
+          stagedPreview
+            ? "Generated city plan applied and saved."
+            : "City plan saved. The studio remains open.",
+        );
       } else {
         setStatus("An earlier snapshot was saved; newer edits are still unsaved.");
       }
@@ -722,10 +717,8 @@ export function CityMapStudio({
         try {
           const canvas = document.createElement("canvas");
           drawCityMap(canvas, displayedMap, {
-            viewMode,
             viewport: { width: 1800, height: 1350, dpr: 1, zoom: 1, padding: 72 },
             layers,
-            maxBuildingExtrusion: viewMode === "isometric" ? 14 : 0,
             resizeCanvas: true,
           });
           canvas.toBlob((blob) => {
@@ -742,7 +735,7 @@ export function CityMapStudio({
                 .replace(/[^a-z0-9]+/gi, "-")
                 .replace(/^-|-$/g, "")
                 .toLowerCase() || "city"
-            }-${viewMode}.png`;
+            }-top-down.png`;
             link.click();
             window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
             setStatus("City map exported as PNG.");
@@ -813,13 +806,7 @@ export function CityMapStudio({
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!displayedMap || generating) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    if (
-      event.button !== 0 ||
-      activeTool === "pan" ||
-      mode === "presentation" ||
-      previewActive ||
-      viewMode === "isometric"
-    ) {
+    if (event.button !== 0 || activeTool === "pan" || mode === "presentation" || previewActive) {
       dragRef.current = { kind: "pan", clientX: event.clientX, clientY: event.clientY };
       return;
     }
@@ -1296,9 +1283,11 @@ export function CityMapStudio({
             type="button"
             className="primary-button min-h-11 whitespace-nowrap"
             onClick={handleSave}
-            disabled={!dirty || saving || !mapData || previewActive}
+            disabled={
+              saving || generating || !displayedMap || (previewActive ? previewStale : !dirty)
+            }
           >
-            {saving ? "Saving…" : "Save city plan"}
+            {saving ? "Saving…" : previewActive ? "Apply & save plan" : "Save city plan"}
           </button>
         </div>
       </header>
@@ -1320,23 +1309,6 @@ export function CityMapStudio({
               className={`min-h-9 rounded-lg px-3 text-xs font-semibold capitalize ${mode === item ? "bg-brand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
             >
               {item}
-            </button>
-          ))}
-        </div>
-        <div
-          className="flex rounded-xl border border-grove-600 bg-grove-950/70 p-1"
-          role="group"
-          aria-label="Map projection"
-        >
-          {(["topdown", "isometric"] as const).map((item) => (
-            <button
-              key={item}
-              type="button"
-              aria-pressed={viewMode === item}
-              onClick={() => requestViewMode(item)}
-              className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${viewMode === item ? "bg-earth-sand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
-            >
-              {item === "topdown" ? "Top-down" : "Isometric"}
             </button>
           ))}
         </div>
@@ -1390,8 +1362,7 @@ export function CityMapStudio({
           Reset plan
         </button>
         <span className="ml-auto whitespace-nowrap text-[11px] text-slate-400">
-          {mode === "presentation" ? "Presentation" : "Edit"} ·{" "}
-          {viewMode === "topdown" ? "Top-down" : "Isometric"}
+          {mode === "presentation" ? "Presentation" : "Edit"} · Top-down
         </span>
       </div>
 
@@ -1415,7 +1386,7 @@ export function CityMapStudio({
               aria-label={label}
               title={label}
               aria-pressed={activeTool === tool}
-              disabled={mode === "presentation" || viewMode === "isometric" || previewActive}
+              disabled={mode === "presentation" || previewActive}
               onClick={() => {
                 setActiveTool(tool);
                 setSelection(null);
@@ -1531,11 +1502,6 @@ export function CityMapStudio({
                   ? "Generated preview"
                   : `${activeTool[0].toUpperCase()}${activeTool.slice(1)} tool`}
             </span>
-            {viewMode === "isometric" && (
-              <span className="rounded-full border border-earth-clay/40 bg-grove-950/80 px-3 py-1.5 text-xs text-earth-sand backdrop-blur">
-                Read-only projection
-              </span>
-            )}
           </div>
 
           {mode === "presentation" && (
@@ -2455,7 +2421,7 @@ export function CityMapStudio({
         </span>
         <span>
           {externalConnections.length} world approach{externalConnections.length === 1 ? "" : "es"}{" "}
-          · {viewMode === "topdown" ? "Top-down" : "Isometric 45°"}
+          · Top-down
         </span>
       </footer>
 
