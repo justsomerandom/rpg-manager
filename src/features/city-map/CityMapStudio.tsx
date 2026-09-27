@@ -230,18 +230,20 @@ function synchronizeApproaches(
   map: CityMap,
   approaches: readonly CityMapApproach[],
   environment?: CityTerrainContext,
+  generatedPlan?: CityMap,
 ): CityMap {
   if (approachesMatch(map, approaches)) return map;
   const config = configFromMap(map, city.population);
   const generated = attachApproaches(
     applyRoadTheme(
-      generateCityPlan(
-        city,
-        config,
-        [],
-        approaches.map((approach) => approach.angle),
-        environment,
-      ),
+      generatedPlan ??
+        generateCityPlan(
+          city,
+          config,
+          [],
+          approaches.map((approach) => approach.angle),
+          environment,
+        ),
       (config.roadTheme ?? "western") as RoadTheme,
     ),
     approaches,
@@ -486,13 +488,30 @@ export function CityMapStudio({
       roadTheme: "western",
     };
     getCityMap(worldId, city.id)
-      .then((existing) => {
+      .then(async (existing) => {
         if (cancelled) return;
         if (existing) {
           const approachesChanged = !approachesMatch(existing, externalConnections);
           const environmentChanged = !environmentsMatch(existing.terrain, environment);
+          const config = configFromMap(existing, city.population);
+          const generatedApproaches = approachesChanged
+            ? await generatePlanInWorker({
+                city,
+                config,
+                lockedBuildings: [],
+                entrances: externalConnections.map((approach) => approach.angle),
+                terrain: environment,
+              })
+            : undefined;
+          if (cancelled) return;
           const synchronized = attachEnvironment(
-            synchronizeApproaches(city, existing, externalConnections, environment),
+            synchronizeApproaches(
+              city,
+              existing,
+              externalConnections,
+              environment,
+              generatedApproaches,
+            ),
             environment,
           );
           setConfig(configFromMap(synchronized, city.population));
@@ -506,17 +525,16 @@ export function CityMapStudio({
           }
           setGeneratorOpen(false);
         } else {
+          const plan = await generatePlanInWorker({
+            city,
+            config: recommended,
+            lockedBuildings: [],
+            entrances: externalConnections.map((approach) => approach.angle),
+            terrain: environment,
+          });
+          if (cancelled) return;
           const generated = attachApproaches(
-            applyRoadTheme(
-              generateCityPlan(
-                city,
-                recommended,
-                [],
-                externalConnections.map((approach) => approach.angle),
-                environment,
-              ),
-              (recommended.roadTheme ?? "western") as RoadTheme,
-            ),
+            applyRoadTheme(plan, (recommended.roadTheme ?? "western") as RoadTheme),
             externalConnections,
           );
           setConfig(recommended);

@@ -1,10 +1,10 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, WheelEvent } from "react";
 import { useBlocker, useParams } from "react-router-dom";
 import { getWorldMap, saveWorldMap, type MapCity, type MapLocationKind } from "../../api/worldMap";
 import type { CityTerrainContext } from "../../api/cityMap";
 import { getErrorMessage } from "../../api/client";
-import { CityMapEditor, type CityMapApproach } from "../../components/CityMapEditor";
+import type { CityMapApproach } from "../../components/CityMapEditor";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useCloseGuard } from "../../hooks/useCloseGuard";
 import { settlementIcons, terrainIcons, vegetationIcons } from "../../assets/map-icons";
@@ -55,6 +55,11 @@ import {
   smoothLayer,
 } from "./map/generation";
 import { normalizeFreehandRoad, routeRoad, type RoadRouteResult } from "./map/roads";
+
+const CityMapEditor = lazy(async () => {
+  const module = await import("../../features/city-map/CityMapStudio");
+  return { default: module.CityMapStudio };
+});
 
 const iconCache = new Map<string, Promise<HTMLImageElement>>();
 const MAX_COMPILED_PIXELS = 12_000_000;
@@ -3024,20 +3029,31 @@ export function WorldMapPage() {
         </span>
       </footer>
       {cityEditorCity && worldId ? (
-        <CityMapEditor
-          key={cityEditorCity.id}
-          worldId={worldId}
-          city={cityEditorCity}
-          externalConnections={cityExternalConnections}
-          environment={cityEnvironment}
-          onDirtyChange={setCityEditorDirty}
-          onSavingChange={setCityEditorSaving}
-          onClose={() => {
-            setCityEditorDirty(false);
-            setCityEditorSaving(false);
-            setCityEditorCity(null);
-          }}
-        />
+        <Suspense
+          fallback={
+            <div
+              className="fixed inset-0 z-[80] flex items-center justify-center bg-grove-950 text-sm text-slate-200"
+              role="status"
+            >
+              <span className="loading-dot" aria-hidden="true" /> Loading City Studio…
+            </div>
+          }
+        >
+          <CityMapEditor
+            key={cityEditorCity.id}
+            worldId={worldId}
+            city={cityEditorCity}
+            externalConnections={cityExternalConnections}
+            environment={cityEnvironment}
+            onDirtyChange={setCityEditorDirty}
+            onSavingChange={setCityEditorSaving}
+            onClose={() => {
+              setCityEditorDirty(false);
+              setCityEditorSaving(false);
+              setCityEditorCity(null);
+            }}
+          />
+        </Suspense>
       ) : null}
       <ConfirmDialog
         open={Boolean(confirmation)}
