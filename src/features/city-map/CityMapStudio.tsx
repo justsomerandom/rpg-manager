@@ -245,6 +245,7 @@ export function CityMapStudio({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [rendering, setRendering] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -282,6 +283,7 @@ export function CityMapStudio({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const revisionRef = useRef(0);
   const generationJobRef = useRef(0);
+  const renderJobRef = useRef(0);
   const dragRef = useRef<DragState>(null);
   const roadDrawingRef = useRef(false);
   const draftRoadRef = useRef<Array<{ x: number; y: number }>>([]);
@@ -473,8 +475,20 @@ export function CityMapStudio({
 
   useEffect(() => {
     if (!displayedMap || !canvasRef.current) return;
-    drawCityMap(canvasRef.current, displayedMap, renderOptions);
+    const job = ++renderJobRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      if (renderJobRef.current !== job || !canvasRef.current) return;
+      drawCityMap(canvasRef.current, displayedMap, renderOptions);
+      setRendering(false);
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [displayedMap, renderOptions]);
+
+  const requestViewMode = (next: CityViewMode) => {
+    if (next === viewMode) return;
+    setRendering(true);
+    setViewMode(next);
+  };
 
   const cityPoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!displayedMap || !canvasRef.current) return null;
@@ -557,7 +571,10 @@ export function CityMapStudio({
   };
 
   const requestClose = () => {
-    if (saving) return;
+    if (saving) {
+      setStatus("Saving is still in progress. The studio can close when it finishes.");
+      return;
+    }
     if (dirty) setCloseRequested(true);
     else onClose();
   };
@@ -830,18 +847,25 @@ export function CityMapStudio({
 
   if (loading) {
     return (
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-grove-950 text-slate-200"
-        role="status"
-      >
-        <span className="loading-dot" aria-hidden="true" /> Loading {city.name} City Studio…
+      <div className="fixed inset-0 z-[80] flex flex-col bg-grove-950 text-slate-200">
+        <header className="flex min-h-16 items-center border-b border-grove-600/70 px-4">
+          <button type="button" className="secondary-button min-h-11" onClick={onClose}>
+            <span aria-hidden="true">←</span> World map
+          </button>
+        </header>
+        <div className="flex flex-1 items-center justify-center" role="status">
+          <div className="glass-panel px-6 py-5 text-center">
+            <span className="loading-dot" aria-hidden="true" /> Loading {city.name} City Studio…
+            <p className="mt-2 text-xs text-slate-400">Checking the saved plan and world roads.</p>
+          </div>
+        </div>
       </div>
     );
   }
 
   if (!displayedMap && error) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-grove-950 p-6">
+      <div className="fixed inset-0 z-[80] flex items-center justify-center bg-grove-950 p-6">
         <section className="glass-panel max-w-lg p-7 text-center" role="alert">
           <p className="section-label">City plan unavailable</p>
           <h2 className="mt-3 font-display text-2xl font-semibold">
@@ -866,15 +890,14 @@ export function CityMapStudio({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-[#06110c] text-brand-glow">
-      <header className="relative z-20 flex min-h-[4.5rem] shrink-0 items-center justify-between gap-3 border-b border-grove-600/75 bg-grove-900/95 px-3 py-2 shadow-xl backdrop-blur-xl sm:px-5">
+    <div className="fixed inset-0 z-[80] flex min-h-0 flex-col overflow-hidden bg-[#06110c] text-brand-glow">
+      <header className="relative z-20 flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-grove-600/75 bg-grove-900/95 px-3 py-2 shadow-xl backdrop-blur-xl sm:px-5">
         <div className="flex min-w-0 items-center gap-3">
           <button
             ref={closeButtonRef}
             type="button"
             className="secondary-button min-h-11 shrink-0 !px-3"
             onClick={requestClose}
-            disabled={saving}
           >
             <span aria-hidden="true">←</span>
             <span className="hidden sm:inline">World map</span>
@@ -891,74 +914,7 @@ export function CityMapStudio({
           </span>
         </div>
 
-        <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
-          <div
-            className="flex rounded-xl border border-grove-600 bg-grove-950/70 p-1"
-            role="group"
-            aria-label="Studio mode"
-          >
-            {(["edit", "presentation"] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                aria-pressed={mode === item}
-                onClick={() => setMode(item)}
-                className={`min-h-9 rounded-lg px-3 text-xs font-semibold capitalize ${mode === item ? "bg-brand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-          <div
-            className="flex rounded-xl border border-grove-600 bg-grove-950/70 p-1"
-            role="group"
-            aria-label="Map projection"
-          >
-            {(["topdown", "isometric"] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                aria-pressed={viewMode === item}
-                onClick={() => setViewMode(item)}
-                className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${viewMode === item ? "bg-earth-sand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
-              >
-                {item === "topdown" ? "Top-down" : "Isometric"}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Undo city edit"
-            title="Undo"
-            disabled={!undoStack.length || previewActive}
-            onClick={handleUndo}
-          >
-            ↶
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Redo city edit"
-            title="Redo"
-            disabled={!redoStack.length || previewActive}
-            onClick={handleRedo}
-          >
-            ↷
-          </button>
-          <button
-            type="button"
-            className="secondary-button min-h-11 whitespace-nowrap"
-            onClick={() => {
-              setGeneratorOpen(true);
-              setPreviewMap(null);
-              setPreviewStale(true);
-              setInspectorOpen(true);
-            }}
-            disabled={saving}
-          >
-            Generate plan
-          </button>
+        <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
             className="secondary-button min-h-11 whitespace-nowrap xl:hidden"
@@ -977,6 +933,80 @@ export function CityMapStudio({
           </button>
         </div>
       </header>
+
+      <div className="relative z-10 flex min-h-12 shrink-0 items-center gap-2 overflow-x-auto border-b border-grove-600/65 bg-grove-900/80 px-3 py-1.5 sm:px-5">
+        <div
+          className="flex rounded-xl border border-grove-600 bg-grove-950/70 p-1"
+          role="group"
+          aria-label="Studio mode"
+        >
+          {(["edit", "presentation"] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              aria-pressed={mode === item}
+              onClick={() => setMode(item)}
+              className={`min-h-9 rounded-lg px-3 text-xs font-semibold capitalize ${mode === item ? "bg-brand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+        <div
+          className="flex rounded-xl border border-grove-600 bg-grove-950/70 p-1"
+          role="group"
+          aria-label="Map projection"
+        >
+          {(["topdown", "isometric"] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              aria-pressed={viewMode === item}
+              onClick={() => requestViewMode(item)}
+              className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${viewMode === item ? "bg-earth-sand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
+            >
+              {item === "topdown" ? "Top-down" : "Isometric"}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Undo city edit"
+          title="Undo"
+          disabled={!undoStack.length || previewActive}
+          onClick={handleUndo}
+        >
+          ↶
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Redo city edit"
+          title="Redo"
+          disabled={!redoStack.length || previewActive}
+          onClick={handleRedo}
+        >
+          ↷
+        </button>
+        <button
+          type="button"
+          className="secondary-button min-h-11 whitespace-nowrap"
+          onClick={() => {
+            setGeneratorOpen(true);
+            setPreviewMap(null);
+            setPreviewStale(true);
+            setInspectorOpen(true);
+          }}
+          disabled={saving}
+        >
+          Generate plan
+        </button>
+        <span className="ml-auto whitespace-nowrap text-[11px] text-slate-400">
+          {mode === "presentation" ? "Presentation" : "Edit"} ·{" "}
+          {viewMode === "topdown" ? "Top-down" : "Isometric"}
+        </span>
+      </div>
 
       <div className="relative flex min-h-0 flex-1">
         <nav
@@ -1079,6 +1109,23 @@ export function CityMapStudio({
               }}
             />
           ) : null}
+
+          {(saving || generating || rendering) && (
+            <div
+              className="pointer-events-auto absolute inset-0 z-20 flex items-center justify-center bg-grove-950/45 backdrop-blur-[1px]"
+              role="status"
+              aria-live="polite"
+            >
+              <div className="rounded-2xl border border-grove-600/80 bg-grove-950/95 px-5 py-4 text-sm font-semibold text-slate-100 shadow-2xl">
+                <span className="loading-dot" aria-hidden="true" />
+                {saving
+                  ? "Saving city plan…"
+                  : generating
+                    ? "Generating city plan…"
+                    : "Rendering view…"}
+              </div>
+            </div>
+          )}
 
           <div className="pointer-events-none absolute left-4 top-4 flex max-w-[calc(100%-2rem)] flex-wrap gap-2">
             <span className="rounded-full border border-grove-600/80 bg-grove-950/80 px-3 py-1.5 text-xs text-slate-200 backdrop-blur">
