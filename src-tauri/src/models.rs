@@ -50,6 +50,24 @@ pub struct WorldEntry {
     pub created_at: i64,
 }
 
+#[derive(Serialize, Clone)]
+pub struct IndexSuggestion {
+    pub key: String,
+    pub source_kind: String,
+    pub source_id: String,
+    pub title: String,
+    pub summary: String,
+    pub body: String,
+    pub category: String,
+    pub context: String,
+}
+
+#[derive(Serialize)]
+pub struct WorldIndexSnapshot {
+    pub entries: Vec<WorldEntry>,
+    pub suggestions: Vec<IndexSuggestion>,
+}
+
 #[derive(Serialize)]
 pub struct WorldTemplate {
     pub id: String,

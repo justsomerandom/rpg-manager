@@ -43,6 +43,7 @@ pub fn run() {
             update_character,
             delete_character,
             list_world_entries,
+            get_world_index_snapshot,
             create_world_entry,
             update_world_entry,
             delete_world_entry,

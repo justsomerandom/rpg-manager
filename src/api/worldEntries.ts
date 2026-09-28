@@ -3,8 +3,11 @@ import { invokeOrThrow } from "./client";
 export const WORLD_ENTRY_CATEGORIES = [
   "magic_system",
   "item_type",
+  "ability",
+  "character",
   "character_template",
   "faction",
+  "landmark",
   "region",
   "note",
 ] as const;
@@ -22,6 +25,22 @@ export type WorldEntry = {
   created_at: number;
 };
 
+export type IndexSuggestion = {
+  key: string;
+  source_kind: string;
+  source_id: string;
+  title: string;
+  summary: string;
+  body: string;
+  category: WorldEntryCategory;
+  context: string;
+};
+
+export type WorldIndexSnapshot = {
+  entries: WorldEntry[];
+  suggestions: IndexSuggestion[];
+};
+
 export async function listWorldEntries(
   worldId: string,
   category?: WorldEntryCategory,
@@ -30,6 +49,10 @@ export async function listWorldEntries(
     worldId,
     category,
   });
+}
+
+export async function getWorldIndexSnapshot(worldId: string): Promise<WorldIndexSnapshot> {
+  return await invokeOrThrow<WorldIndexSnapshot>("get_world_index_snapshot", { worldId });
 }
 
 export async function createWorldEntry(
