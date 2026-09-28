@@ -1,12 +1,48 @@
 import type { MapState } from "../../../api/worldMap";
-import { DEFAULT_WATER_LEVEL, MAP_DEFAULT_SIZE } from "./constants";
+import {
+  DEFAULT_WATER_LEVEL,
+  MAP_DEFAULT_HEIGHT,
+  MAP_DEFAULT_WIDTH,
+  MAP_MAX_AXIS,
+  MAP_MAX_CELLS,
+} from "./constants";
 import type { MapStateExtended } from "./types";
 import { clamp, fbm } from "./math";
 import {
   normalizedPointToTriangleCell,
   triangleCellCenterNormalized,
   triangleCellNeighbors,
+  triangleGridSize,
 } from "./triangleGrid";
+
+const FBM_MAX = 0.96875;
+
+function signedFbm(x: number, y: number, seed: number) {
+  return (fbm(x, y, seed) / FBM_MAX) * 2 - 1;
+}
+
+function smoothstep(edge0: number, edge1: number, value: number) {
+  const t = clamp((value - edge0) / Math.max(Number.EPSILON, edge1 - edge0));
+  return t * t * (3 - 2 * t);
+}
+
+export function validateWorldMapDimensions(width: number, height: number) {
+  if (
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    width < 8 ||
+    height < 8 ||
+    width > MAP_MAX_AXIS ||
+    height > MAP_MAX_AXIS
+  ) {
+    throw new Error(`Map dimensions must be whole numbers between 8 and ${MAP_MAX_AXIS}.`);
+  }
+  if (width * height > MAP_MAX_CELLS) {
+    throw new Error(
+      `Map dimensions may contain at most ${MAP_MAX_CELLS.toLocaleString()} triangular cells.`,
+    );
+  }
+}
 
 export function smoothLayer(values: number[], width: number, height: number, passes = 1) {
   let current = [...values];
@@ -30,16 +66,24 @@ export function smoothLayer(values: number[], width: number, height: number, pas
   return current;
 }
 
-export function generateTemperatureLayer(width: number, height: number, seed: number) {
+export function generateTemperatureLayer(
+  width: number,
+  height: number,
+  seed: number,
+  relief?: readonly number[],
+) {
   const layer: number[] = new Array(width * height);
+  const aspect = triangleGridSize(width, height).width / triangleGridSize(width, height).height;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const center = triangleCellCenterNormalized(x, y, width, height);
-      const nx = center.x - 0.5;
-      const ny = center.y - 0.5;
-      const base = 0.6 - Math.abs(ny) * 0.7;
-      const noiseValue = fbm(nx * 3 + 50, ny * 3 - 50, seed + 517);
-      layer[y * width + x] = clamp(base + noiseValue * 0.35);
+      const worldX = (center.x - 0.5) * aspect;
+      const worldY = center.y - 0.5;
+      const latitude = Math.abs(worldY) * 2;
+      const climateNoise = signedFbm(worldX * 2.2 + 50, worldY * 2.2 - 50, seed + 517);
+      const index = y * width + x;
+      const altitudeCooling = Math.max(0, (relief?.[index] ?? 0.5) - 0.55) * 0.75;
+      layer[index] = clamp(0.82 - latitude * 0.68 + climateNoise * 0.12 - altitudeCooling);
     }
   }
   return smoothLayer(layer, width, height, 1);
@@ -50,19 +94,25 @@ export function generateVegetationLayer(
   height: number,
   seed: number,
   moisture: number[],
+  temperature?: readonly number[],
+  relief?: readonly number[],
 ) {
   const layer: number[] = new Array(width * height);
+  const aspect = triangleGridSize(width, height).width / triangleGridSize(width, height).height;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const idx = y * width + x;
       const center = triangleCellCenterNormalized(x, y, width, height);
-      const nx = center.x - 0.5;
-      const ny = center.y - 0.5;
-      const noiseValue = fbm(nx * 4 - 80, ny * 4 + 120, seed + 733);
+      const worldX = (center.x - 0.5) * aspect;
+      const worldY = center.y - 0.5;
+      const noiseValue = signedFbm(worldX * 3.5 - 80, worldY * 3.5 + 120, seed + 733);
+      const climateComfort = 1 - Math.abs((temperature?.[idx] ?? 0.55) - 0.56) * 1.6;
+      const altitudePenalty = Math.max(0, (relief?.[idx] ?? 0.5) - 0.62) * 0.7;
       const base =
-        (Number.isFinite(moisture[idx]) ? moisture[idx] : 0.5) * 0.6 +
-        (1 - Math.abs(ny)) * 0.2 +
-        noiseValue * 0.2;
+        (Number.isFinite(moisture[idx]) ? moisture[idx] : 0.5) * 0.66 +
+        climateComfort * 0.2 +
+        noiseValue * 0.14 -
+        altitudePenalty;
       layer[idx] = clamp(base);
     }
   }
@@ -72,19 +122,10 @@ export function generateVegetationLayer(
 export function generateProceduralMap(
   seed: number,
   waterLevel = DEFAULT_WATER_LEVEL,
-  width = MAP_DEFAULT_SIZE,
-  height = MAP_DEFAULT_SIZE,
+  width = MAP_DEFAULT_WIDTH,
+  height = MAP_DEFAULT_HEIGHT,
 ): MapStateExtended {
-  if (
-    !Number.isInteger(width) ||
-    !Number.isInteger(height) ||
-    width < 8 ||
-    height < 8 ||
-    width > 256 ||
-    height > 256
-  ) {
-    throw new Error("Map dimensions must be whole numbers between 8 and 256.");
-  }
+  validateWorldMapDimensions(width, height);
   const safeSeed = Number.isSafeInteger(seed) && seed >= 0 ? seed : Date.now();
   const safeWaterLevel = clamp(
     Number.isFinite(waterLevel) ? waterLevel : DEFAULT_WATER_LEVEL,
@@ -93,27 +134,51 @@ export function generateProceduralMap(
   );
   const relief: number[] = new Array(width * height);
   const moisture: number[] = new Array(width * height);
+  const bounds = triangleGridSize(width, height);
+  const aspect = bounds.width / bounds.height;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const center = triangleCellCenterNormalized(x, y, width, height);
-      const nx = center.x - 0.5;
-      const ny = center.y - 0.5;
-      const distance = Math.sqrt(nx * nx + ny * ny);
-      const elevation = fbm(nx * 4, ny * 4, safeSeed) - distance * 0.7;
-      const moistureValue = fbm(nx * 6 + 100, ny * 6 + 200, safeSeed + 1337);
+      const worldX = (center.x - 0.5) * aspect;
+      const worldY = center.y - 0.5;
+      const warpX = signedFbm(worldX * 1.1 + 18, worldY * 1.1 - 9, safeSeed + 101) * 0.28;
+      const warpY = signedFbm(worldX * 1.1 - 27, worldY * 1.1 + 14, safeSeed + 211) * 0.2;
+      const warpedX = worldX + warpX;
+      const warpedY = worldY + warpY;
+      const continental = signedFbm(warpedX * 1.35, warpedY * 1.35, safeSeed);
+      const regional = signedFbm(warpedX * 3.4 + 40, warpedY * 3.4 - 35, safeSeed + 541);
+      const ridgeNoise = signedFbm(warpedX * 2.35 - 70, warpedY * 2.35 + 55, safeSeed + 887);
+      const ridges = Math.pow(clamp(1 - Math.abs(ridgeNoise) * 1.7), 3);
+      const edgeDistance = Math.min(center.x, 1 - center.x, center.y, 1 - center.y);
+      const oceanShelf = 1 - smoothstep(0.025, 0.15, edgeDistance);
+      const elevation =
+        0.45 + continental * 0.32 + regional * 0.12 + ridges * 0.28 - oceanShelf * 0.5;
+      const moistureNoise = signedFbm(warpedX * 2.7 + 100, warpedY * 2.7 + 200, safeSeed + 1337);
+      const prevailingWind = (0.5 - center.x) * 0.09;
       const idx = y * width + x;
-      relief[idx] = clamp(Math.pow(elevation + 0.5, 1.25));
-      moisture[idx] = clamp(moistureValue);
+      relief[idx] = clamp(elevation);
+      moisture[idx] = clamp(
+        0.53 + moistureNoise * 0.3 + prevailingWind - Math.max(0, elevation - 0.64) * 0.38,
+      );
     }
   }
-  const temperature = generateTemperatureLayer(width, height, safeSeed + 321);
-  const vegetation = generateVegetationLayer(width, height, safeSeed + 555, moisture);
+  const smoothedRelief = smoothLayer(relief, width, height, 2);
+  const smoothedMoisture = smoothLayer(moisture, width, height, 1);
+  const temperature = generateTemperatureLayer(width, height, safeSeed + 321, smoothedRelief);
+  const vegetation = generateVegetationLayer(
+    width,
+    height,
+    safeSeed + 555,
+    smoothedMoisture,
+    temperature,
+    smoothedRelief,
+  );
   return {
     grid_kind: "triangle",
     width,
     height,
-    relief: smoothLayer(relief, width, height, 2),
-    moisture,
+    relief: smoothedRelief,
+    moisture: smoothedMoisture,
     water_level: safeWaterLevel,
     seed: safeSeed,
     cities: [],
@@ -143,18 +208,7 @@ export function normalizeLayer(values: number[], width: number, height: number) 
 export function ensureExtendedMap(map: MapState): MapStateExtended {
   const width = Number(map.width);
   const height = Number(map.height);
-  if (
-    !Number.isInteger(width) ||
-    !Number.isInteger(height) ||
-    width < 8 ||
-    height < 8 ||
-    width > 256 ||
-    height > 256
-  ) {
-    throw new Error(
-      "Saved map dimensions are invalid or unsupported (expected 8-256 cells per side).",
-    );
-  }
+  validateWorldMapDimensions(width, height);
   const total = width * height;
   const extended = map as MapStateExtended;
   const seed = Number.isSafeInteger(map.seed) && map.seed >= 0 ? map.seed : Date.now();
@@ -180,10 +234,10 @@ export function ensureExtendedMap(map: MapState): MapStateExtended {
   const relief = sanitizeLayer(map.relief, () => generated().relief);
   const moisture = sanitizeLayer(map.moisture, () => generated().moisture);
   const temperature = sanitizeLayer(extended.temperature, () =>
-    generateTemperatureLayer(width, height, seed + 777),
+    generateTemperatureLayer(width, height, seed + 777, relief),
   );
   const vegetation = sanitizeLayer(extended.vegetation, () =>
-    generateVegetationLayer(width, height, seed + 999, moisture),
+    generateVegetationLayer(width, height, seed + 999, moisture, temperature, relief),
   );
   const compiledImage = (value: unknown) =>
     typeof value === "string" &&

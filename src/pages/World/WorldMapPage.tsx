@@ -10,17 +10,22 @@ import { useCloseGuard } from "../../hooks/useCloseGuard";
 import { settlementIcons, terrainIcons, vegetationIcons } from "../../assets/map-icons";
 import {
   ACTION_CURSOR,
-  BIOME_COLORS,
   BIOME_GROUPS,
   BIOME_TARGETS,
   BRUSH_ACTIONS,
   CLIMATE_INTENSITY,
   CLIMATE_LAYERS,
   DEFAULT_WATER_LEVEL,
-  MAP_DEFAULT_SIZE,
-  MAP_SIZE_CHOICES,
+  EDITOR_BIOME_COLORS,
+  MAP_DEFAULT_HEIGHT,
+  MAP_DEFAULT_WIDTH,
+  MAP_MAX_AXIS,
+  MAP_MAX_CELLS,
+  MAP_MIN_AXIS,
+  MAP_SIZE_PRESETS,
   MAX_ZOOM,
   MIN_ZOOM,
+  PRESENTATION_BIOME_COLORS,
   PRIMARY_ACTION_LABEL,
   RELIEF_INTENSITY,
   SNAP_THRESHOLD,
@@ -332,7 +337,7 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
   for (let row = 0; row < map.height; row += 1) {
     for (let column = 0; column < map.width; column += 1) {
       const biome = biomeGrid[row * map.width + column];
-      const color = BIOME_COLORS[biome];
+      const color = PRESENTATION_BIOME_COLORS[biome];
       ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
       traceTrianglePath(ctx, column, row, cellSize);
       ctx.fill();
@@ -496,7 +501,7 @@ function drawGridMap(
     for (let x = firstColumn; x <= lastColumn; x += 1) {
       const idx = y * map.width + x;
       const biome = biomeGrid[idx] ?? "plains";
-      const color = BIOME_COLORS[biome];
+      const color = EDITOR_BIOME_COLORS[biome];
       ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
       traceTrianglePath(ctx, x, y, cellSize, pan);
       ctx.fill();
@@ -971,7 +976,8 @@ export function WorldMapPage() {
   const [roadFromId, setRoadFromId] = useState("");
   const [roadToId, setRoadToId] = useState("");
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("biomes");
-  const [desiredSize, setDesiredSize] = useState(MAP_DEFAULT_SIZE);
+  const [desiredWidth, setDesiredWidth] = useState(MAP_DEFAULT_WIDTH);
+  const [desiredHeight, setDesiredHeight] = useState(MAP_DEFAULT_HEIGHT);
   const [saving, setSaving] = useState(false);
   const [compiling, setCompiling] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -1097,6 +1103,31 @@ export function WorldMapPage() {
     : isPanning
       ? "grabbing"
       : ACTION_CURSOR[primaryAction];
+  const desiredCellCount = desiredWidth * desiredHeight;
+  const desiredSizeError = useMemo(() => {
+    if (
+      !Number.isInteger(desiredWidth) ||
+      !Number.isInteger(desiredHeight) ||
+      desiredWidth < MAP_MIN_AXIS ||
+      desiredHeight < MAP_MIN_AXIS ||
+      desiredWidth > MAP_MAX_AXIS ||
+      desiredHeight > MAP_MAX_AXIS
+    ) {
+      return `Width and height must each be ${MAP_MIN_AXIS}–${MAP_MAX_AXIS}.`;
+    }
+    if (desiredCellCount > MAP_MAX_CELLS) {
+      return `Keep the map at or below ${MAP_MAX_CELLS.toLocaleString()} triangles.`;
+    }
+    return null;
+  }, [desiredCellCount, desiredHeight, desiredWidth]);
+  const desiredAspect = useMemo(() => {
+    const bounds = triangleGridSize(Math.max(1, desiredWidth), Math.max(1, desiredHeight));
+    return bounds.width / bounds.height;
+  }, [desiredHeight, desiredWidth]);
+  const selectedSizePreset =
+    MAP_SIZE_PRESETS.find(
+      (preset) => preset.width === desiredWidth && preset.height === desiredHeight,
+    ) ?? null;
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -1152,8 +1183,8 @@ export function WorldMapPage() {
         height: Math.max(1, Math.round(bounds.height)),
       });
     };
+    updateSize();
     if (typeof ResizeObserver === "undefined") {
-      updateSize();
       window.addEventListener("resize", updateSize);
       return () => window.removeEventListener("resize", updateSize);
     }
@@ -1166,7 +1197,45 @@ export function WorldMapPage() {
     });
     observer.observe(node);
     return () => observer.disconnect();
+  }, [loading]);
+
+  const fitMapToViewport = useCallback(
+    (map: Pick<MapStateExtended, "width" | "height">) => {
+      const unscaled = triangleGridSize(map.width, map.height, TILE_BASE);
+      const horizontalRoom = Math.max(80, viewportSize.width - 40);
+      const verticalRoom = Math.max(80, viewportSize.height - 40);
+      const nextZoom = clamp(
+        Math.min(horizontalRoom / unscaled.width, verticalRoom / unscaled.height),
+        MIN_ZOOM,
+        Math.min(1, MAX_ZOOM),
+      );
+      const scaled = triangleGridSize(map.width, map.height, TILE_BASE * nextZoom);
+      const nextPan = {
+        x: (viewportSize.width - scaled.width) / 2,
+        y: (viewportSize.height - scaled.height) / 2,
+      };
+      setZoom(nextZoom);
+      setPanOffset(nextPan);
+    },
+    [viewportSize.height, viewportSize.width],
+  );
+
+  const enterPresentation = useCallback(() => {
+    setPanOffset({ x: 0, y: 0 });
+    setZoom(1);
+    setCompiledView(true);
   }, []);
+
+  const leavePresentation = useCallback(() => {
+    setCompiledView(false);
+  }, []);
+
+  const activeMapWidth = mapState?.width;
+  const activeMapHeight = mapState?.height;
+  useEffect(() => {
+    if (activeMapWidth === undefined || activeMapHeight === undefined || compiledView) return;
+    fitMapToViewport({ width: activeMapWidth, height: activeMapHeight });
+  }, [activeMapHeight, activeMapWidth, compiledView, fitMapToViewport]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1207,10 +1276,12 @@ export function WorldMapPage() {
               kind: "generate",
               seed: Date.now(),
               waterLevel: DEFAULT_WATER_LEVEL,
-              width: MAP_DEFAULT_SIZE,
-              height: MAP_DEFAULT_SIZE,
+              width: MAP_DEFAULT_WIDTH,
+              height: MAP_DEFAULT_HEIGHT,
             });
         if (cancelled) return;
+        setDesiredWidth(prepared.width);
+        setDesiredHeight(prepared.height);
         if (map) {
           setMapState(prepared);
           setDirty(false);
@@ -1348,12 +1419,15 @@ export function WorldMapPage() {
         kind: "generate",
         seed: Date.now(),
         waterLevel: snapshot?.water_level ?? DEFAULT_WATER_LEVEL,
-        width: snapshot?.width ?? MAP_DEFAULT_SIZE,
-        height: snapshot?.height ?? MAP_DEFAULT_SIZE,
+        width: snapshot?.width ?? MAP_DEFAULT_WIDTH,
+        height: snapshot?.height ?? MAP_DEFAULT_HEIGHT,
       });
       if (snapshot) rememberSnapshot(snapshot);
       markEdited();
       setMapState(next);
+      setDesiredWidth(next.width);
+      setDesiredHeight(next.height);
+      fitMapToViewport(next);
       setSelectedCity(null);
       setSelectedCityName("");
       setSelectedCityPopulation("");
@@ -1466,7 +1540,7 @@ export function WorldMapPage() {
           : current,
       );
       setDirty(true);
-      setCompiledView(true);
+      enterPresentation();
       setStatusMessage("Presentation rendered. Save the map to keep it.");
     } catch (compileError) {
       if (activeWorldIdRef.current === compileWorldId) {
@@ -1482,24 +1556,25 @@ export function WorldMapPage() {
   const resizeMap = async () => {
     if (processing) return;
     const snapshot = mapState;
-    setProcessing(`Building a ${desiredSize} × ${desiredSize} triangular grid…`);
+    setProcessing(`Building a ${desiredWidth} × ${desiredHeight} triangular grid…`);
     setError(null);
     try {
       const next = await processWorldMapInWorker({
         kind: "generate",
         seed: Date.now(),
         waterLevel: snapshot?.water_level ?? DEFAULT_WATER_LEVEL,
-        width: desiredSize,
-        height: desiredSize,
+        width: desiredWidth,
+        height: desiredHeight,
       });
       if (snapshot) rememberSnapshot(snapshot);
       markEdited();
       setMapState(next);
+      fitMapToViewport(next);
       setSelectedCity(null);
       setSelectedCityName("");
       setSelectedCityPopulation("");
       setCityEditorCity(null);
-      setStatusMessage(`Rebuilt map at ${desiredSize} × ${desiredSize} triangular cells.`);
+      setStatusMessage(`Rebuilt map at ${desiredWidth} × ${desiredHeight} triangular cells.`);
     } catch (resizeError) {
       setError(getErrorMessage(resizeError, "We couldn't rebuild the world map."));
     } finally {
@@ -1508,6 +1583,10 @@ export function WorldMapPage() {
   };
 
   const handleResizeMap = () => {
+    if (desiredSizeError) {
+      setError(desiredSizeError);
+      return;
+    }
     if (mapState && (mapState.cities.length > 0 || mapState.roads.length > 0 || dirty)) {
       setConfirmation({ kind: "resize" });
       return;
@@ -1987,7 +2066,7 @@ export function WorldMapPage() {
           <section className="space-y-2 text-sm">
             <div className="flex gap-2">
               <button
-                onClick={() => setCompiledView(true)}
+                onClick={enterPresentation}
                 className="primary-button flex-1 disabled:opacity-50"
                 type="button"
                 disabled={!compiledAvailable || !mapState?.compiled_grid}
@@ -1996,7 +2075,7 @@ export function WorldMapPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setCompiledView(false)}
+                onClick={leavePresentation}
                 className="secondary-button flex-1"
                 disabled={!compiledView}
               >
@@ -2050,23 +2129,85 @@ export function WorldMapPage() {
             </label>
           </section>
           <section className="space-y-3 text-sm">
-            <label className="flex flex-col gap-1">
-              Map size
+            <label className="flex flex-col gap-1.5">
+              Landscape preset
               <select
                 className="input-field"
-                value={desiredSize}
-                onChange={(event) => setDesiredSize(Number(event.target.value))}
+                value={
+                  selectedSizePreset
+                    ? `${selectedSizePreset.width}x${selectedSizePreset.height}`
+                    : "custom"
+                }
+                onChange={(event) => {
+                  if (event.target.value === "custom") return;
+                  const [width, height] = event.target.value.split("x").map(Number);
+                  setDesiredWidth(width);
+                  setDesiredHeight(height);
+                }}
               >
-                {MAP_SIZE_CHOICES.map((size) => (
-                  <option key={size} value={size}>
-                    {size} × {size} triangles
+                <option value="custom">Custom dimensions</option>
+                {MAP_SIZE_PRESETS.map((preset) => (
+                  <option
+                    key={`${preset.width}x${preset.height}`}
+                    value={`${preset.width}x${preset.height}`}
+                  >
+                    {preset.label} · {preset.width} × {preset.height}
                   </option>
                 ))}
               </select>
             </label>
-            <button type="button" onClick={handleResizeMap} className="secondary-button">
-              Rebuild at size
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="space-y-1 text-xs text-slate-300">
+                Triangle columns
+                <input
+                  className="input-field"
+                  type="number"
+                  min={MAP_MIN_AXIS}
+                  max={MAP_MAX_AXIS}
+                  step={1}
+                  value={desiredWidth}
+                  onChange={(event) => setDesiredWidth(Number(event.target.value))}
+                />
+              </label>
+              <label className="space-y-1 text-xs text-slate-300">
+                Triangle rows
+                <input
+                  className="input-field"
+                  type="number"
+                  min={MAP_MIN_AXIS}
+                  max={MAP_MAX_AXIS}
+                  step={1}
+                  value={desiredHeight}
+                  onChange={(event) => setDesiredHeight(Number(event.target.value))}
+                />
+              </label>
+            </div>
+            <div
+              className={`rounded-xl border px-3 py-2 text-[11px] leading-5 ${desiredSizeError ? "border-red-500/40 bg-red-950/25 text-red-200" : "border-grove-600/70 bg-grove-800/25 text-slate-300"}`}
+            >
+              {desiredSizeError ??
+                `${desiredCellCount.toLocaleString()} triangles · approximately ${desiredAspect.toFixed(2)}:1`}
+              <span className="block text-slate-400">
+                Limit: {MAP_MAX_AXIS} per axis and {MAP_MAX_CELLS.toLocaleString()} triangles.
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={handleResizeMap}
+                className="secondary-button"
+                disabled={Boolean(desiredSizeError) || mutationPending}
+              >
+                Rebuild map
+              </button>
+              <button
+                type="button"
+                onClick={() => mapState && fitMapToViewport(mapState)}
+                className="secondary-button"
+              >
+                Fit full map
+              </button>
+            </div>
             <button type="button" onClick={handleNaturalizeRelief} className="secondary-button">
               Smooth relief
             </button>
@@ -2097,6 +2238,13 @@ export function WorldMapPage() {
               onChange={(event) => setZoom(Number(event.target.value))}
             />
           </label>
+          <button
+            type="button"
+            className="secondary-button w-full"
+            onClick={() => mapState && fitMapToViewport(mapState)}
+          >
+            Fit full map
+          </button>
         </section>
       )}
     </div>
@@ -2149,7 +2297,7 @@ export function WorldMapPage() {
                   >
                     <span
                       className="h-4 w-4 shrink-0 rounded-full border border-white/20"
-                      style={{ backgroundColor: `rgb(${BIOME_COLORS[biome].join(",")})` }}
+                      style={{ backgroundColor: `rgb(${EDITOR_BIOME_COLORS[biome].join(",")})` }}
                       aria-hidden="true"
                     />
                     <span className="capitalize">{biome.replace(/_/g, " ")}</span>
@@ -2601,11 +2749,7 @@ export function WorldMapPage() {
         <p className="text-xs uppercase tracking-[0.3em] text-earth-sand/60">Compiled view</p>
         <p className="text-earth-sand/80">Using a baked top-down render with grading and noise.</p>
         <div>
-          <button
-            type="button"
-            onClick={() => setCompiledView(false)}
-            className="secondary-button flex-1"
-          >
+          <button type="button" onClick={leavePresentation} className="secondary-button flex-1">
             Return to editor
           </button>
         </div>
@@ -2736,7 +2880,7 @@ export function WorldMapPage() {
             <button
               type="button"
               aria-pressed={!compiledView}
-              onClick={() => setCompiledView(false)}
+              onClick={leavePresentation}
               className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${!compiledView ? "bg-brand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
             >
               Edit
@@ -2745,7 +2889,7 @@ export function WorldMapPage() {
               type="button"
               aria-pressed={compiledView}
               disabled={!compiledAvailable}
-              onClick={() => setCompiledView(true)}
+              onClick={enterPresentation}
               className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${compiledView ? "bg-brand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
             >
               Presentation
@@ -3056,7 +3200,7 @@ export function WorldMapPage() {
         }
         title={
           confirmation?.kind === "resize"
-            ? `Rebuild at ${desiredSize} × ${desiredSize}?`
+            ? `Rebuild at ${desiredWidth} × ${desiredHeight}?`
             : confirmation?.kind === "regenerate"
               ? "Generate new terrain?"
               : confirmation?.kind === "delete-location"

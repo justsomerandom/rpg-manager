@@ -1,10 +1,19 @@
 import type { Biome, ToolGroup, PrimaryAction } from "./types";
 
-export const MAP_DEFAULT_SIZE = 96;
+export const MAP_DEFAULT_WIDTH = 216;
+export const MAP_DEFAULT_HEIGHT = 72;
+export const MAP_MIN_AXIS = 24;
+export const MAP_MAX_AXIS = 256;
+export const MAP_MAX_CELLS = 32_768;
 export const DEFAULT_WATER_LEVEL = 0.42;
-export const MAP_SIZE_CHOICES = [64, 96, 128, 160];
+export const MAP_SIZE_PRESETS = [
+  { label: "Compact landscape", width: 144, height: 56 },
+  { label: "Standard landscape", width: MAP_DEFAULT_WIDTH, height: MAP_DEFAULT_HEIGHT },
+  { label: "Wide landscape", width: 256, height: 84 },
+  { label: "Detailed landscape", width: 256, height: 96 },
+] as const;
 export const TILE_BASE = 28;
-export const MIN_ZOOM = 0.35;
+export const MIN_ZOOM = 0.12;
 export const MAX_ZOOM = 2.75;
 export const SNAP_THRESHOLD = 0.03;
 export const RELIEF_INTENSITY = 0.035;
@@ -21,7 +30,43 @@ export const CLIMATE_LAYERS: Array<{
   { key: "vegetation", label: "Vegetation", minLabel: "Barren", maxLabel: "Lush" },
 ];
 
-export const BIOME_COLORS: Record<Biome, [number, number, number]> = {
+export const EDITOR_BIOME_COLORS: Record<Biome, [number, number, number]> = {
+  ocean: [49, 70, 79],
+  shallow: [70, 94, 102],
+  reef: [90, 113, 111],
+  beach: [166, 151, 121],
+  mangrove: [73, 96, 81],
+  wetland: [86, 103, 85],
+  plains: [112, 123, 93],
+  meadow: [126, 137, 101],
+  forest: [68, 91, 72],
+  rainforest: [53, 82, 65],
+  boreal_forest: [70, 87, 80],
+  hilly_forest: [73, 97, 77],
+  jungle: [51, 79, 62],
+  swamp: [74, 87, 69],
+  fen: [98, 110, 88],
+  savanna: [146, 127, 86],
+  steppe: [133, 121, 98],
+  badlands: [140, 106, 84],
+  desert: [174, 146, 102],
+  crystal_desert: [175, 158, 140],
+  salt_flat: [172, 173, 160],
+  tundra: [134, 138, 137],
+  icy_plains: [162, 176, 180],
+  glacier: [188, 201, 203],
+  mountain: [103, 101, 99],
+  highland: [101, 109, 98],
+  hills: [116, 121, 103],
+  basalt_fields: [75, 72, 71],
+  lava_lake: [145, 80, 63],
+  obsidian_ridge: [61, 58, 60],
+  hot_springs: [96, 131, 130],
+  volcanic_forest: [72, 87, 70],
+  snow: [201, 205, 202],
+};
+
+export const PRESENTATION_BIOME_COLORS: Record<Biome, [number, number, number]> = {
   ocean: [6, 32, 52],
   shallow: [25, 65, 93],
   reef: [41, 99, 126],

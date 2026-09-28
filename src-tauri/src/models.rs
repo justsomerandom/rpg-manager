@@ -10,6 +10,7 @@ use crate::validation::{
 
 const MIN_MAP_AXIS: u32 = 8;
 const MAX_MAP_AXIS: u32 = 256;
+const MAX_MAP_CELLS: usize = 32_768;
 const MAX_MAP_CITIES: usize = 10_000;
 const MAX_MAP_ROADS: usize = 25_000;
 const MAX_MAP_ROAD_POINTS: usize = 500_000;
@@ -134,6 +135,11 @@ impl MapState {
         {
             return Err(format!(
                 "Map width and height must each be between {MIN_MAP_AXIS} and {MAX_MAP_AXIS}"
+            ));
+        }
+        if cell_count > MAX_MAP_CELLS {
+            return Err(format!(
+                "World maps can contain at most {MAX_MAP_CELLS} triangular cells"
             ));
         }
 
@@ -790,6 +796,19 @@ mod tests {
         let mut map = valid_map();
         map.grid_kind = "square".into();
         assert!(map.normalize_and_validate().is_err());
+    }
+
+    #[test]
+    fn map_rejects_dimensions_above_the_cell_budget() {
+        let mut map = valid_map();
+        map.width = 256;
+        map.height = 256;
+
+        let error = map
+            .normalize_and_validate()
+            .expect_err("oversized map should fail");
+
+        assert!(error.contains("32768"));
     }
 
     #[test]
