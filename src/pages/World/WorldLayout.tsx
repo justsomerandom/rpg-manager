@@ -68,8 +68,8 @@ export function WorldLayout() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(31,156,115,0.35),_transparent_45%)] opacity-40" />
 
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center">
-        <div className="pointer-events-auto flex w-full justify-center px-3 pb-2 pt-2 sm:px-4">
-          <div className="min-w-0 max-w-full transition-[width] duration-300 ease-out">
+        <div className="flex w-full justify-center px-3 pb-2 pt-2 sm:px-4">
+          <div className="pointer-events-auto min-w-0 max-w-full transition-[width] duration-300 ease-out">
             <div className="rounded-2xl border border-grove-600/80 bg-grove-900/95 px-2 py-2 shadow-panel backdrop-blur-xl">
               <nav
                 aria-label="Campaign sections"
@@ -118,7 +118,7 @@ export function WorldLayout() {
         </div>
       </header>
 
-      <div className="relative z-10 flex h-full flex-col">
+      <div className="relative flex h-full flex-col">
         <main className="relative flex-1 overflow-hidden" id="world-content" tabIndex={-1}>
           {loadingWorld ? (
             <div className="flex h-full items-center justify-center px-5" role="status">
