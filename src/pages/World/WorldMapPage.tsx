@@ -36,23 +36,23 @@ import {
   PanVector,
   PixelPoint,
   PrimaryAction,
+  ToolComplexity,
   ToolGroup,
 } from "./map/types";
 import { clamp, lerp, pseudoRandom, randomId } from "./map/math";
-import {
-  buildBiomeGrid,
-  buildSmoothPath,
-  computeBiome,
-  extractBiomeLoops,
-  stylizeColor,
-} from "./map/biome";
-import {
-  ensureExtendedMap,
-  generateProceduralMap,
-  normalizeLayer,
-  smoothLayer,
-} from "./map/generation";
+import { buildBiomeGrid, computeBiome } from "./map/biome";
+import { ensureExtendedMap, normalizeLayer, smoothLayer } from "./map/generation";
 import { normalizeFreehandRoad, routeRoad, type RoadRouteResult } from "./map/roads";
+import {
+  normalizedPointToTriangleCell,
+  traceTrianglePath,
+  triangleCellCenterGrid,
+  triangleCellCenterNormalized,
+  triangleCellNeighbors,
+  triangleGridSize,
+  TRIANGLE_HEIGHT_RATIO,
+} from "./map/triangleGrid";
+import type { WorldMapWorkerRequest, WorldMapWorkerResponse } from "./map/worldMap.worker";
 
 const CityMapEditor = lazy(async () => {
   const module = await import("../../features/city-map/CityMapStudio");
@@ -61,11 +61,44 @@ const CityMapEditor = lazy(async () => {
 
 const iconCache = new Map<string, Promise<HTMLImageElement>>();
 const MAX_COMPILED_PIXELS = 12_000_000;
+const ESSENTIAL_TOOL_GROUPS: Array<[ToolGroup, string]> = [
+  ["general", "Start"],
+  ["biome", "Paint"],
+  ["locations", "Places"],
+  ["roads", "Connect"],
+];
+const ADVANCED_TOOL_GROUPS: Array<[ToolGroup, string]> = [
+  ["general", "Map setup"],
+  ["relief", "Sculpt terrain"],
+  ["biome", "Climate & biomes"],
+  ["roads", "Road tuning"],
+  ["locations", "Places"],
+];
+
+function processWorldMapInWorker(request: WorldMapWorkerRequest): Promise<MapStateExtended> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./map/worldMap.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    worker.onmessage = (event: MessageEvent<WorldMapWorkerResponse>) => {
+      worker.terminate();
+      if (event.data.ok) resolve(event.data.map);
+      else reject(new Error(event.data.error));
+    };
+    worker.onerror = (event) => {
+      worker.terminate();
+      reject(new Error(event.message || "The world-map worker stopped unexpectedly."));
+    };
+    worker.postMessage(request);
+  });
+}
 
 function terrainContextForCity(map: MapStateExtended, city: MapCity): CityTerrainContext {
-  const cellX = Math.max(0, Math.min(map.width - 1, Math.floor(city.x * map.width)));
-  const cellY = Math.max(0, Math.min(map.height - 1, Math.floor(city.y * map.height)));
-  const index = cellY * map.width + cellX;
+  const cell = normalizedPointToTriangleCell(city, map.width, map.height);
+  const cellX = cell.column;
+  const cellY = cell.row;
+  const index = cell.index;
+  const origin = triangleCellCenterNormalized(cellX, cellY, map.width, map.height);
   const searchRadius = Math.min(
     14,
     Math.max(4, Math.ceil(Math.min(map.width, map.height) * 0.045)),
@@ -80,13 +113,16 @@ function terrainContextForCity(map: MapStateExtended, city: MapCity): CityTerrai
     for (let offsetX = -searchRadius; offsetX <= searchRadius; offsetX += 1) {
       const x = cellX + offsetX;
       if (x < 0 || x >= map.width || (offsetX === 0 && offsetY === 0)) continue;
-      const distanceSquared = offsetX * offsetX + offsetY * offsetY;
+      const sampleCenter = triangleCellCenterNormalized(x, y, map.width, map.height);
+      const normalizedX = (sampleCenter.x - origin.x) * (map.width + 1);
+      const normalizedY = (sampleCenter.y - origin.y) * map.height;
+      const distanceSquared = normalizedX * normalizedX + normalizedY * normalizedY;
       if (distanceSquared > searchRadius * searchRadius) continue;
       const sampleIndex = y * map.width + x;
       if ((map.relief[sampleIndex] ?? 1) > map.water_level) continue;
       const weight = 1 / Math.max(1, distanceSquared);
-      coastX += offsetX * weight;
-      coastY += offsetY * weight;
+      coastX += (sampleCenter.x - origin.x) * weight;
+      coastY += (sampleCenter.y - origin.y) * weight;
       waterWeight += weight;
     }
   }
@@ -100,6 +136,11 @@ function terrainContextForCity(map: MapStateExtended, city: MapCity): CityTerrai
     temperature: clamp(map.temperature[index] ?? 0.5, 0, 1),
     vegetation: clamp(map.vegetation[index] ?? 0.5, 0, 1),
   };
+}
+
+function triangleCellLabel(map: MapStateExtended, point: PixelPoint) {
+  const cell = normalizedPointToTriangleCell(point, map.width, map.height);
+  return `Triangle ${cell.column + 1}, ${cell.row + 1}`;
 }
 
 type MapConfirmation =
@@ -145,10 +186,11 @@ function drawCoastlineGlimmer(
       const idx = y * map.width + x;
       const elev = map.relief[idx];
       if (Math.abs(elev - sea) > threshold) continue;
+      const center = triangleCellCenterGrid(x, y);
       const jitterX = (pseudoRandom(x, y, map.seed + 2025) - 0.5) * cellSize * 0.5;
       const jitterY = (pseudoRandom(x, y, map.seed + 6066) - 0.5) * cellSize * 0.5;
-      const px = x * cellSize + jitterX;
-      const py = y * cellSize + jitterY;
+      const px = center.x * cellSize + jitterX;
+      const py = center.y * cellSize + jitterY;
       ctx.beginPath();
       ctx.moveTo(px, py);
       ctx.lineTo(px + cellSize * 0.35, py + cellSize * 0.15);
@@ -264,9 +306,11 @@ function terrainIconForBiome(biome: Biome): string | null {
 }
 
 async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
-  const cellSize = Math.max(8, Math.floor(920 / Math.max(map.width, map.height)));
-  const logicalWidth = Math.max(640, Math.floor(map.width * cellSize));
-  const logicalHeight = Math.max(640, Math.floor(map.height * cellSize));
+  const gridUnits = triangleGridSize(map.width, map.height);
+  const cellSize = Math.max(8, Math.floor(920 / Math.max(gridUnits.width, gridUnits.height)));
+  const mapPixels = triangleGridSize(map.width, map.height, cellSize);
+  const logicalWidth = Math.max(1, Math.round(mapPixels.width));
+  const logicalHeight = Math.max(1, Math.round(mapPixels.height));
   const canvas = document.createElement("canvas");
   const pixelRatio = canvasPixelRatio(logicalWidth, logicalHeight);
   canvas.width = Math.floor(logicalWidth * pixelRatio);
@@ -285,23 +329,15 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
   ctx.fillRect(0, 0, width, height);
 
   const biomeGrid = buildBiomeGrid(map);
-  const uniqueBiomes = Array.from(new Set(biomeGrid));
-  const watery = new Set<Biome>(["ocean", "shallow", "reef", "beach", "wetland", "mangrove"]);
-  uniqueBiomes.forEach((biome, biomeIndex) => {
-    const loops = extractBiomeLoops(biomeGrid, map.width, map.height, biome);
-    const color = stylizeColor(BIOME_COLORS[biome]);
-    ctx.fillStyle = color;
-    loops.forEach((loop, loopIndex) => {
-      const jitterScale = watery.has(biome) ? 0.48 : 0.26;
-      const path = buildSmoothPath(
-        loop,
-        cellSize,
-        jitterScale,
-        map.seed + biomeIndex * 41 + loopIndex * 13,
-      );
-      ctx.fill(path);
-    });
-  });
+  for (let row = 0; row < map.height; row += 1) {
+    for (let column = 0; column < map.width; column += 1) {
+      const biome = biomeGrid[row * map.width + column];
+      const color = BIOME_COLORS[biome];
+      ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
+      traceTrianglePath(ctx, column, row, cellSize);
+      ctx.fill();
+    }
+  }
   drawCoastlineGlimmer(map, ctx, cellSize);
 
   // Compiled maps are cartographic images, not editor grids. Boundary paths
@@ -312,8 +348,8 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
       if (!road.points.length) return;
       ctx.beginPath();
       road.points.forEach((point, index) => {
-        const px = point.x * map.width * cellSize;
-        const py = point.y * map.height * cellSize;
+        const px = point.x * mapPixels.width;
+        const py = point.y * mapPixels.height;
         if (index === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       });
@@ -341,8 +377,12 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
       const terrainUrl = terrainIconForBiome(biome);
       const jitterX = (pseudoRandom(x, y, map.seed + 101) - 0.5) * cellSize * 0.6;
       const jitterY = (pseudoRandom(x, y, map.seed + 303) - 0.5) * cellSize * 0.6;
-      const cx = x * cellSize + jitterX;
-      const cy = y * cellSize + jitterY;
+      const center = triangleCellCenterGrid(
+        Math.min(map.width - 1, Math.floor(x)),
+        Math.min(map.height - 1, Math.floor(y)),
+      );
+      const cx = center.x * cellSize + jitterX;
+      const cy = center.y * cellSize + jitterY;
       const vegSize = Math.max(10, cellSize * 0.7);
       if (vegUrl && pseudoRandom(x, y, map.seed + 1515) < vegLevel + 0.2) {
         iconPromises.push(
@@ -368,8 +408,8 @@ async function drawCompiledGrid(map: MapStateExtended): Promise<string> {
   const cityLabels: Array<{ name: string; x: number; y: number; size: number }> = [];
   map.cities.forEach((city) => {
     const iconUrl = locationIcon(city);
-    const px = city.x * map.width * cellSize;
-    const py = city.y * map.height * cellSize;
+    const px = city.x * mapPixels.width;
+    const py = city.y * mapPixels.height;
     const size = Math.max(18, cellSize * 1.1);
     iconPromises.push(
       loadIcon(iconUrl).then((img) => {
@@ -406,6 +446,7 @@ async function generateCompiledRender(map: MapStateExtended): Promise<string> {
 function drawGridMap(
   canvas: HTMLCanvasElement | null,
   map: MapStateExtended,
+  biomeGrid: readonly Biome[],
   zoom: number,
   pan: PanVector,
   viewport: { width: number; height: number },
@@ -423,25 +464,42 @@ function drawGridMap(
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const pixelRatio = canvasPixelRatio(viewport.width, viewport.height);
-  canvas.width = viewport.width * pixelRatio;
-  canvas.height = viewport.height * pixelRatio;
-  canvas.style.width = `${viewport.width}px`;
-  canvas.style.height = `${viewport.height}px`;
+  const backingWidth = Math.max(1, Math.round(viewport.width * pixelRatio));
+  const backingHeight = Math.max(1, Math.round(viewport.height * pixelRatio));
+  if (canvas.width !== backingWidth) canvas.width = backingWidth;
+  if (canvas.height !== backingHeight) canvas.height = backingHeight;
+  const cssWidth = `${viewport.width}px`;
+  const cssHeight = `${viewport.height}px`;
+  if (canvas.style.width !== cssWidth) canvas.style.width = cssWidth;
+  if (canvas.style.height !== cssHeight) canvas.style.height = cssHeight;
   ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   ctx.clearRect(0, 0, viewport.width, viewport.height);
   ctx.fillStyle = "#030c07";
   ctx.fillRect(0, 0, viewport.width, viewport.height);
 
   const cellSize = TILE_BASE * zoom;
-  for (let y = 0; y < map.height; y += 1) {
-    for (let x = 0; x < map.width; x += 1) {
+  const triangleHeight = cellSize * TRIANGLE_HEIGHT_RATIO;
+  const mapPixels = triangleGridSize(map.width, map.height, cellSize);
+  const firstRow = Math.max(0, Math.floor(-pan.y / triangleHeight) - 1);
+  const lastRow = Math.min(
+    map.height - 1,
+    Math.ceil((viewport.height - pan.y) / triangleHeight) + 1,
+  );
+  const firstColumn = Math.max(0, Math.floor((-pan.x * 2) / cellSize) - 2);
+  const lastColumn = Math.min(
+    map.width - 1,
+    Math.ceil(((viewport.width - pan.x) * 2) / cellSize) + 2,
+  );
+  ctx.strokeStyle = "rgba(255,255,255,0.1)";
+  ctx.lineWidth = 0.7;
+  for (let y = firstRow; y <= lastRow; y += 1) {
+    for (let x = firstColumn; x <= lastColumn; x += 1) {
       const idx = y * map.width + x;
-      const biome = computeBiome(map, idx);
+      const biome = biomeGrid[idx] ?? "plains";
       const color = BIOME_COLORS[biome];
-      const px = x * cellSize + pan.x;
-      const py = y * cellSize + pan.y;
       ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
-      ctx.fillRect(px, py, cellSize + 1, cellSize + 1);
+      traceTrianglePath(ctx, x, y, cellSize, pan);
+      ctx.fill();
       if (overlayMode !== "biomes" && overlayRanges) {
         let overlay: string | null = null;
         if (overlayMode === "relief" && overlayRanges.relief) {
@@ -453,36 +511,20 @@ function drawGridMap(
         }
         if (overlay) {
           ctx.fillStyle = overlay;
-          ctx.fillRect(px, py, cellSize + 1, cellSize + 1);
+          ctx.fill();
         }
       }
+      ctx.stroke();
     }
   }
-
-  const totalWidth = map.width * cellSize;
-  const totalHeight = map.height * cellSize;
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let gx = 0; gx <= map.width; gx += 1) {
-    const px = gx * cellSize + pan.x;
-    ctx.moveTo(px, pan.y);
-    ctx.lineTo(px, pan.y + totalHeight);
-  }
-  for (let gy = 0; gy <= map.height; gy += 1) {
-    const py = gy * cellSize + pan.y;
-    ctx.moveTo(pan.x, py);
-    ctx.lineTo(pan.x + totalWidth, py);
-  }
-  ctx.stroke();
 
   ctx.lineWidth = 2;
   ctx.strokeStyle = "rgba(224,196,128,0.85)";
   map.roads.forEach((road) => {
     ctx.beginPath();
     road.points.forEach((point, index) => {
-      const px = point.x * map.width * cellSize + pan.x;
-      const py = point.y * map.height * cellSize + pan.y;
+      const px = point.x * mapPixels.width + pan.x;
+      const py = point.y * mapPixels.height + pan.y;
       if (index === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
@@ -495,8 +537,8 @@ function drawGridMap(
     ctx.strokeStyle = "rgba(255,214,142,0.95)";
     ctx.beginPath();
     freehandDraft.forEach((point, index) => {
-      const px = point.x * map.width * cellSize + pan.x;
-      const py = point.y * map.height * cellSize + pan.y;
+      const px = point.x * mapPixels.width + pan.x;
+      const py = point.y * mapPixels.height + pan.y;
       if (index === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
@@ -507,8 +549,8 @@ function drawGridMap(
     ctx.fillStyle = "rgba(255,198,109,0.8)";
     ctx.beginPath();
     ctx.arc(
-      roadDraftStart.x * map.width * cellSize + pan.x,
-      roadDraftStart.y * map.height * cellSize + pan.y,
+      roadDraftStart.x * mapPixels.width + pan.x,
+      roadDraftStart.y * mapPixels.height + pan.y,
       5,
       0,
       Math.PI * 2,
@@ -517,8 +559,8 @@ function drawGridMap(
   }
 
   map.cities.forEach((city) => {
-    const px = city.x * map.width * cellSize + pan.x;
-    const py = city.y * map.height * cellSize + pan.y;
+    const px = city.x * mapPixels.width + pan.x;
+    const py = city.y * mapPixels.height + pan.y;
     ctx.fillStyle = city.id === highlightCityId ? "#ffe066" : "#e3f2db";
     ctx.beginPath();
     ctx.arc(px, py, 6, 0, Math.PI * 2);
@@ -548,15 +590,20 @@ function applyBrushToMap(
   if (!BRUSH_ACTIONS.has(action)) return map;
   const width = map.width;
   const height = map.height;
-  const cx = clamp(point.x * width - 0.5, 0, width - 1);
-  const cy = clamp(point.y * height - 0.5, 0, height - 1);
-  const radius = Math.max(1, Math.round(brushSize * Math.min(width, height)));
+  const selectedCell = normalizedPointToTriangleCell(point, width, height);
+  const columnRadius = Math.max(1, Math.ceil(brushSize * (width + 1)) + 1);
+  const rowRadius = Math.max(1, Math.ceil(brushSize * height) + 1);
+  const normalizedRadius = Math.max(brushSize, 1 / Math.max(width, height));
+  const editsRelief = action === "paint-biome" || action.endsWith("-relief");
+  const editsMoisture = action === "paint-biome" || action.endsWith("-moisture");
+  const editsTemperature = action === "paint-biome" || action.endsWith("-temperature");
+  const editsVegetation = action === "paint-biome" || action.endsWith("-vegetation");
   const copy: MapStateExtended = {
     ...invalidateCompiledMap(map),
-    relief: [...map.relief],
-    moisture: [...map.moisture],
-    temperature: [...map.temperature],
-    vegetation: [...map.vegetation],
+    relief: editsRelief ? [...map.relief] : map.relief,
+    moisture: editsMoisture ? [...map.moisture] : map.moisture,
+    temperature: editsTemperature ? [...map.temperature] : map.temperature,
+    vegetation: editsVegetation ? [...map.vegetation] : map.vegetation,
   };
   const target = { ...BIOME_TARGETS[selectedBiome] };
   switch (selectedBiome) {
@@ -581,17 +628,18 @@ function applyBrushToMap(
   }
 
   for (
-    let y = Math.max(0, Math.floor(cy - radius));
-    y <= Math.min(height - 1, Math.ceil(cy + radius));
+    let y = Math.max(0, selectedCell.row - rowRadius);
+    y <= Math.min(height - 1, selectedCell.row + rowRadius);
     y += 1
   ) {
     for (
-      let x = Math.max(0, Math.floor(cx - radius));
-      x <= Math.min(width - 1, Math.ceil(cx + radius));
+      let x = Math.max(0, selectedCell.column - columnRadius);
+      x <= Math.min(width - 1, selectedCell.column + columnRadius);
       x += 1
     ) {
-      const dx = (x - cx) / radius;
-      const dy = (y - cy) / radius;
+      const center = triangleCellCenterNormalized(x, y, width, height);
+      const dx = (center.x - point.x) / normalizedRadius;
+      const dy = (center.y - point.y) / normalizedRadius;
       const distance = Math.sqrt(dx * dx + dy * dy);
       if (distance > 1) continue;
       const falloff = 1 - distance * distance;
@@ -741,28 +789,34 @@ function addCityToMap(
 ): { map: MapStateExtended; city: MapCity | null } {
   const width = map.width;
   const height = map.height;
-  const clickedX = Math.round(clamp(xRatio, 0, 0.9999) * width - 0.5);
-  const clickedY = Math.round(clamp(yRatio, 0, 0.9999) * height - 0.5);
+  const clickedCell = normalizedPointToTriangleCell({ x: xRatio, y: yRatio }, width, height);
+  const clickedX = clickedCell.column;
+  const clickedY = clickedCell.row;
   let gridX = clickedX;
   let gridY = clickedY;
   if (isWaterCell(map, gridX, gridY)) {
-    let candidate: { x: number; y: number; distance: number } | null = null;
     const searchRadius = Math.min(12, Math.max(width, height));
-    for (
-      let y = Math.max(0, clickedY - searchRadius);
-      y <= Math.min(height - 1, clickedY + searchRadius);
-      y += 1
-    ) {
-      for (
-        let x = Math.max(0, clickedX - searchRadius);
-        x <= Math.min(width - 1, clickedX + searchRadius);
-        x += 1
-      ) {
-        if (isWaterCell(map, x, y)) continue;
-        const candidateDistance = (x - clickedX) ** 2 + (y - clickedY) ** 2;
-        if (!candidate || candidateDistance < candidate.distance) {
-          candidate = { x, y, distance: candidateDistance };
-        }
+    const visited = new Uint8Array(width * height);
+    const queue: Array<{ x: number; y: number; distance: number }> = [
+      { x: clickedX, y: clickedY, distance: 0 },
+    ];
+    visited[clickedCell.index] = 1;
+    let candidate: { x: number; y: number } | null = null;
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const current = queue[cursor];
+      if (!isWaterCell(map, current.x, current.y)) {
+        candidate = current;
+        break;
+      }
+      if (current.distance >= searchRadius) continue;
+      for (const neighbor of triangleCellNeighbors(current.x, current.y, width, height)) {
+        if (visited[neighbor.index]) continue;
+        visited[neighbor.index] = 1;
+        queue.push({
+          x: neighbor.column,
+          y: neighbor.row,
+          distance: current.distance + 1,
+        });
       }
     }
     if (!candidate) return { map, city: null };
@@ -771,12 +825,13 @@ function addCityToMap(
   }
   const idx = gridY * width + gridX;
   const elevation = map.relief[idx];
+  const center = triangleCellCenterNormalized(gridX, gridY, width, height);
   const city: MapCity = {
     id: randomId(),
     name: name.trim().slice(0, 120),
     kind,
-    x: (gridX + 0.5) / width,
-    y: (gridY + 0.5) / height,
+    x: center.x,
+    y: center.y,
     elevation,
     population:
       kind === "settlement" || kind === "port"
@@ -891,6 +946,8 @@ export function WorldMapPage() {
   const { worldId } = useParams();
   const [mapState, setMapState] = useState<MapStateExtended | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadStage, setLoadStage] = useState("Loading saved map…");
+  const [processing, setProcessing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [selectedBiome, setSelectedBiome] = useState<Biome>("plains");
@@ -922,6 +979,7 @@ export function WorldMapPage() {
   const [previewWarning, setPreviewWarning] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [toolComplexity, setToolComplexity] = useState<ToolComplexity>("essential");
   const [toolGroup, setToolGroup] = useState<ToolGroup>("general");
   const [reliefAction, setReliefAction] = useState<"raise" | "lower">("raise");
   const [locationAction, setLocationAction] = useState<PrimaryAction>("navigate");
@@ -930,13 +988,12 @@ export function WorldMapPage() {
   const [selectedCityName, setSelectedCityName] = useState("");
   const [selectedCityPopulation, setSelectedCityPopulation] = useState("");
   const [selectedLocationKind, setSelectedLocationKind] = useState<MapLocationKind>("settlement");
-  const [compiledView, setCompiledView] = useState(true);
+  const [compiledView, setCompiledView] = useState(false);
   const [cityEditorSaving, setCityEditorSaving] = useState(false);
   const [undoStack, setUndoStack] = useState<MapStateExtended[]>([]);
   const [redoStack, setRedoStack] = useState<MapStateExtended[]>([]);
   const [confirmation, setConfirmation] = useState<MapConfirmation | null>(null);
   const [navigationConfirmationOpen, setNavigationConfirmationOpen] = useState(false);
-  const compiledPreferenceRef = useRef(false);
   const revisionRef = useRef(0);
   const activeWorldIdRef = useRef(worldId);
   activeWorldIdRef.current = worldId;
@@ -990,13 +1047,15 @@ export function WorldMapPage() {
     });
   }, []);
 
-  const mutationPending = saving || compiling || cityEditorSaving;
+  const mutationPending = saving || compiling || cityEditorSaving || Boolean(processing);
   const navigationBlocked = dirty || cityEditorDirty || mutationPending;
   const blocker = useBlocker(navigationBlocked);
   useEffect(() => {
     if (blocker.state !== "blocked") return;
     if (mutationPending) {
-      setStatusMessage("A map save is still in progress. Wait for it to finish before leaving.");
+      setStatusMessage(
+        "A map operation is still in progress. Wait for it to finish before leaving.",
+      );
       blocker.reset();
       return;
     }
@@ -1006,8 +1065,7 @@ export function WorldMapPage() {
   useCloseGuard({
     active: navigationBlocked,
     pending: mutationPending,
-    pendingMessage:
-      "A map save is still in progress. Wait for it to finish before closing the app.",
+    pendingMessage: "A map operation is still in progress. Wait for it to finish before closing.",
     confirmMessage: "Discard unsaved world or city map changes and close the app?",
   });
 
@@ -1069,17 +1127,12 @@ export function WorldMapPage() {
   useEffect(() => {
     if (!mapState) {
       setCompiledView(false);
-      compiledPreferenceRef.current = false;
       return;
     }
     const available = Boolean(mapState.compiled_grid);
     if (!available) {
       setCompiledView(false);
-      compiledPreferenceRef.current = false;
       return;
-    }
-    if (!compiledPreferenceRef.current) {
-      setCompiledView(true);
     }
   }, [mapState]);
 
@@ -1120,6 +1173,7 @@ export function WorldMapPage() {
     activeWorldIdRef.current = worldId;
     setSaving(false);
     setCompiling(false);
+    setProcessing(null);
     if (!worldId) {
       setMapState(null);
       setError("No world was selected.");
@@ -1127,6 +1181,7 @@ export function WorldMapPage() {
       return;
     }
     setLoading(true);
+    setLoadStage("Loading saved map…");
     setMapState(null);
     setError(null);
     setPreviewWarning(null);
@@ -1143,13 +1198,24 @@ export function WorldMapPage() {
     freehandDraftRef.current = [];
     revisionRef.current = 0;
     getWorldMap(worldId)
-      .then((map) => {
+      .then(async (map) => {
+        if (cancelled) return;
+        setLoadStage(map ? "Preparing triangular terrain…" : "Generating triangular terrain…");
+        const prepared = map
+          ? await processWorldMapInWorker({ kind: "prepare", map })
+          : await processWorldMapInWorker({
+              kind: "generate",
+              seed: Date.now(),
+              waterLevel: DEFAULT_WATER_LEVEL,
+              width: MAP_DEFAULT_SIZE,
+              height: MAP_DEFAULT_SIZE,
+            });
         if (cancelled) return;
         if (map) {
-          setMapState(ensureExtendedMap(map));
+          setMapState(prepared);
           setDirty(false);
         } else {
-          setMapState(generateProceduralMap(Date.now()));
+          setMapState(prepared);
           setDirty(true);
         }
         setError(null);
@@ -1167,6 +1233,8 @@ export function WorldMapPage() {
     };
   }, [worldId, loadAttempt]);
 
+  const biomeGrid = useMemo(() => (mapState ? buildBiomeGrid(mapState) : []), [mapState]);
+
   useEffect(() => {
     if (!mapState || compiledView) return;
     const canvas = canvasRef.current;
@@ -1182,18 +1250,22 @@ export function WorldMapPage() {
             temperature: temperatureRange,
             vegetation: vegetationRange,
           };
-    drawGridMap(
-      canvas,
-      mapState,
-      zoom,
-      panOffset,
-      viewportSize,
-      selectedCity?.id,
-      roadDraftStart ?? undefined,
-      overlayMode,
-      overlayRanges,
-      freehandDraft,
-    );
+    const frame = window.requestAnimationFrame(() => {
+      drawGridMap(
+        canvas,
+        mapState,
+        biomeGrid,
+        zoom,
+        panOffset,
+        viewportSize,
+        selectedCity?.id,
+        roadDraftStart ?? undefined,
+        overlayMode,
+        overlayRanges,
+        freehandDraft,
+      );
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [
     mapState,
     zoom,
@@ -1204,6 +1276,7 @@ export function WorldMapPage() {
     freehandDraft,
     overlayMode,
     compiledView,
+    biomeGrid,
   ]);
 
   const mapInfo = useMemo(() => {
@@ -1265,22 +1338,32 @@ export function WorldMapPage() {
     [mapState, cityEditorCity],
   );
 
-  const generateMap = () => {
-    if (mapState) rememberSnapshot(mapState);
-    markEdited();
-    setMapState(
-      generateProceduralMap(
-        Date.now(),
-        mapState?.water_level ?? DEFAULT_WATER_LEVEL,
-        mapState?.width ?? MAP_DEFAULT_SIZE,
-        mapState?.height ?? MAP_DEFAULT_SIZE,
-      ),
-    );
-    setSelectedCity(null);
-    setSelectedCityName("");
-    setSelectedCityPopulation("");
-    setCityEditorCity(null);
-    setStatusMessage("Generated new terrain.");
+  const generateMap = async () => {
+    if (processing) return;
+    const snapshot = mapState;
+    setProcessing("Generating triangular terrain…");
+    setError(null);
+    try {
+      const next = await processWorldMapInWorker({
+        kind: "generate",
+        seed: Date.now(),
+        waterLevel: snapshot?.water_level ?? DEFAULT_WATER_LEVEL,
+        width: snapshot?.width ?? MAP_DEFAULT_SIZE,
+        height: snapshot?.height ?? MAP_DEFAULT_SIZE,
+      });
+      if (snapshot) rememberSnapshot(snapshot);
+      markEdited();
+      setMapState(next);
+      setSelectedCity(null);
+      setSelectedCityName("");
+      setSelectedCityPopulation("");
+      setCityEditorCity(null);
+      setStatusMessage("Generated new triangular terrain.");
+    } catch (generationError) {
+      setError(getErrorMessage(generationError, "We couldn't generate the world terrain."));
+    } finally {
+      setProcessing(null);
+    }
   };
 
   const handleGenerateMap = () => {
@@ -1288,7 +1371,7 @@ export function WorldMapPage() {
       setConfirmation({ kind: "regenerate" });
       return;
     }
-    generateMap();
+    void generateMap();
   };
 
   const handleNaturalizeRelief = () => {
@@ -1384,7 +1467,6 @@ export function WorldMapPage() {
       );
       setDirty(true);
       setCompiledView(true);
-      compiledPreferenceRef.current = true;
       setStatusMessage("Presentation rendered. Save the map to keep it.");
     } catch (compileError) {
       if (activeWorldIdRef.current === compileWorldId) {
@@ -1397,21 +1479,32 @@ export function WorldMapPage() {
     }
   };
 
-  const resizeMap = () => {
-    if (mapState) rememberSnapshot(mapState);
-    markEdited();
-    const next = generateProceduralMap(
-      Date.now(),
-      mapState?.water_level ?? DEFAULT_WATER_LEVEL,
-      desiredSize,
-      desiredSize,
-    );
-    setMapState(next);
-    setSelectedCity(null);
-    setSelectedCityName("");
-    setSelectedCityPopulation("");
-    setCityEditorCity(null);
-    setStatusMessage(`Rebuilt map at ${desiredSize} × ${desiredSize}.`);
+  const resizeMap = async () => {
+    if (processing) return;
+    const snapshot = mapState;
+    setProcessing(`Building a ${desiredSize} × ${desiredSize} triangular grid…`);
+    setError(null);
+    try {
+      const next = await processWorldMapInWorker({
+        kind: "generate",
+        seed: Date.now(),
+        waterLevel: snapshot?.water_level ?? DEFAULT_WATER_LEVEL,
+        width: desiredSize,
+        height: desiredSize,
+      });
+      if (snapshot) rememberSnapshot(snapshot);
+      markEdited();
+      setMapState(next);
+      setSelectedCity(null);
+      setSelectedCityName("");
+      setSelectedCityPopulation("");
+      setCityEditorCity(null);
+      setStatusMessage(`Rebuilt map at ${desiredSize} × ${desiredSize} triangular cells.`);
+    } catch (resizeError) {
+      setError(getErrorMessage(resizeError, "We couldn't rebuild the world map."));
+    } finally {
+      setProcessing(null);
+    }
   };
 
   const handleResizeMap = () => {
@@ -1419,7 +1512,7 @@ export function WorldMapPage() {
       setConfirmation({ kind: "resize" });
       return;
     }
-    resizeMap();
+    void resizeMap();
   };
 
   const screenToMapPoint = useCallback(
@@ -1429,14 +1522,15 @@ export function WorldMapPage() {
       const localX = event.clientX - rect.left;
       const localY = event.clientY - rect.top;
       const cellSize = TILE_BASE * zoom;
-      const gridX = (localX - panOffset.x) / cellSize;
-      const gridY = (localY - panOffset.y) / cellSize;
-      if (gridX < 0 || gridY < 0 || gridX > mapState.width || gridY > mapState.height) {
+      const mapPixels = triangleGridSize(mapState.width, mapState.height, cellSize);
+      const mapX = localX - panOffset.x;
+      const mapY = localY - panOffset.y;
+      if (mapX < 0 || mapY < 0 || mapX > mapPixels.width || mapY > mapPixels.height) {
         return null;
       }
       return {
-        x: clamp(gridX / mapState.width, 0.5 / mapState.width, 1 - 0.5 / mapState.width),
-        y: clamp(gridY / mapState.height, 0.5 / mapState.height, 1 - 0.5 / mapState.height),
+        x: clamp(mapX / mapPixels.width),
+        y: clamp(mapY / mapPixels.height),
       };
     },
     [mapState, zoom, panOffset],
@@ -1460,7 +1554,7 @@ export function WorldMapPage() {
   };
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (cityEditorCity || saving) return;
+    if (cityEditorCity || mutationPending) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     if (event.button !== 0) {
       setIsPanning(true);
@@ -1796,8 +1890,8 @@ export function WorldMapPage() {
     if (!confirmation) return;
     const action = confirmation;
     setConfirmation(null);
-    if (action.kind === "regenerate") generateMap();
-    else if (action.kind === "resize") resizeMap();
+    if (action.kind === "regenerate") void generateMap();
+    else if (action.kind === "resize") void resizeMap();
     else if (action.kind === "delete-location") deleteLocation(action.locationId);
     else deleteRoad(action.roadId);
   };
@@ -1807,6 +1901,45 @@ export function WorldMapPage() {
   };
   const renderGeneralPanel = () => (
     <div className="space-y-4">
+      {toolComplexity === "essential" && (
+        <section className="space-y-3">
+          <div>
+            <p className="section-label">Suggested workflow</p>
+            <p className="mt-2 text-xs leading-5 text-slate-300">
+              Build the land, paint broad regions, place important sites, then connect them. Save
+              from the top bar whenever you reach a useful checkpoint.
+            </p>
+          </div>
+          <div className="grid gap-2">
+            {(
+              [
+                ["1", "Generate a base", "Create a fresh triangular terrain", "general"],
+                ["2", "Paint regions", "Shape broad biome areas", "biome"],
+                ["3", "Place sites", "Add settlements and landmarks", "locations"],
+                ["4", "Connect sites", "Route roads around terrain", "roads"],
+              ] as const
+            ).map(([step, title, description, group]) => (
+              <button
+                key={step}
+                type="button"
+                onClick={() => {
+                  if (step === "1") handleGenerateMap();
+                  else setToolGroup(group);
+                }}
+                className="flex min-h-14 items-center gap-3 rounded-xl border border-grove-600/70 bg-grove-800/25 px-3 text-left hover:bg-grove-700/70"
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand/15 font-semibold text-brand-glow">
+                  {step}
+                </span>
+                <span>
+                  <span className="block text-sm font-semibold text-slate-100">{title}</span>
+                  <span className="block text-[11px] text-slate-400">{description}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
       <section className="space-y-2">
         <p className="text-xs uppercase tracking-[0.2em] text-earth-sand/60">Map status</p>
         <div className="rounded-xl border border-earth-clay/40 p-4 bg-black/30 text-sm space-y-1">
@@ -1832,116 +1965,140 @@ export function WorldMapPage() {
           </p>
         )}
       </section>
-      <section className="grid grid-cols-2 gap-3">
-        <button onClick={handleGenerateMap} className="primary-button" type="button">
-          Generate terrain
-        </button>
-        <button
-          onClick={handleCompileMap}
-          className="secondary-button"
-          type="button"
-          disabled={saving || compiling}
-        >
-          {compiling
-            ? "Rendering…"
-            : compiledAvailable
-              ? "Refresh presentation"
-              : "Render presentation"}
-        </button>
-      </section>
-      <section className="space-y-2 text-sm">
-        <div className="flex gap-2">
-          <button
-            onClick={() => {
-              compiledPreferenceRef.current = true;
-              setCompiledView(true);
-            }}
-            className="primary-button flex-1 disabled:opacity-50"
-            type="button"
-            disabled={!compiledAvailable || !mapState?.compiled_grid}
-          >
-            {compiledAvailable ? "View presentation" : "Render presentation first"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              compiledPreferenceRef.current = true;
-              setCompiledView(false);
-            }}
-            className="secondary-button flex-1"
-            disabled={!compiledView}
-          >
-            Back to editor
-          </button>
-        </div>
-        <p className="text-[11px] text-earth-sand/60">
-          {compiledAvailable
-            ? `Last baked: ${compiledTimestamp ?? "unknown"}`
-            : "Render creates a top-down presentation; Save persists it."}
-        </p>
-      </section>
-      <section className="space-y-2 text-sm">
-        <label className="flex items-center justify-between gap-4">
-          <span>Water level</span>
-          <input
-            type="range"
-            min={0.05}
-            max={0.8}
-            step={0.01}
-            value={mapState?.water_level ?? DEFAULT_WATER_LEVEL}
-            onPointerDown={() => {
-              if (mapState) rememberSnapshot(mapState);
-            }}
-            onChange={(event) => handleWaterChange(Number(event.target.value))}
-          />
-        </label>
-        <label className="flex items-center justify-between gap-4">
-          <span>Overlay</span>
-          <select
-            className="px-3 py-1 rounded border border-earth-clay/40 bg-black/40 text-xs"
-            value={overlayMode}
-            onChange={(event) => setOverlayMode(event.target.value as OverlayMode)}
-          >
-            <option value="biomes">Biomes</option>
-            <option value="relief">Relief</option>
-            <option value="temperature">Temperature</option>
-            <option value="vegetation">Vegetation</option>
-          </select>
-        </label>
-        <label className="flex items-center justify-between gap-4">
-          <span>Zoom</span>
-          <input
-            type="range"
-            min={MIN_ZOOM}
-            max={MAX_ZOOM}
-            step={0.05}
-            value={zoom}
-            onChange={(event) => setZoom(Number(event.target.value))}
-          />
-        </label>
-      </section>
-      <section className="space-y-3 text-sm">
-        <label className="flex flex-col gap-1">
-          Map size
-          <select
-            className="input-field"
-            value={desiredSize}
-            onChange={(event) => setDesiredSize(Number(event.target.value))}
-          >
-            {MAP_SIZE_CHOICES.map((size) => (
-              <option key={size} value={size}>
-                {size} x {size}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="button" onClick={handleResizeMap} className="secondary-button">
-          Rebuild at size
-        </button>
-        <button type="button" onClick={handleNaturalizeRelief} className="secondary-button">
-          Smooth relief
-        </button>
-      </section>
+      {toolComplexity === "advanced" && (
+        <>
+          <section className="grid grid-cols-2 gap-3">
+            <button onClick={handleGenerateMap} className="primary-button" type="button">
+              Generate terrain
+            </button>
+            <button
+              onClick={handleCompileMap}
+              className="secondary-button"
+              type="button"
+              disabled={mutationPending}
+            >
+              {compiling
+                ? "Rendering…"
+                : compiledAvailable
+                  ? "Refresh presentation"
+                  : "Render presentation"}
+            </button>
+          </section>
+          <section className="space-y-2 text-sm">
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCompiledView(true)}
+                className="primary-button flex-1 disabled:opacity-50"
+                type="button"
+                disabled={!compiledAvailable || !mapState?.compiled_grid}
+              >
+                {compiledAvailable ? "View presentation" : "Render presentation first"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCompiledView(false)}
+                className="secondary-button flex-1"
+                disabled={!compiledView}
+              >
+                Back to editor
+              </button>
+            </div>
+            <p className="text-[11px] text-earth-sand/60">
+              {compiledAvailable
+                ? `Last baked: ${compiledTimestamp ?? "unknown"}`
+                : "Render creates a top-down presentation; Save persists it."}
+            </p>
+          </section>
+          <section className="space-y-2 text-sm">
+            <label className="flex items-center justify-between gap-4">
+              <span>Water level</span>
+              <input
+                type="range"
+                min={0.05}
+                max={0.8}
+                step={0.01}
+                value={mapState?.water_level ?? DEFAULT_WATER_LEVEL}
+                onPointerDown={() => {
+                  if (mapState) rememberSnapshot(mapState);
+                }}
+                onChange={(event) => handleWaterChange(Number(event.target.value))}
+              />
+            </label>
+            <label className="flex items-center justify-between gap-4">
+              <span>Overlay</span>
+              <select
+                className="px-3 py-1 rounded border border-earth-clay/40 bg-black/40 text-xs"
+                value={overlayMode}
+                onChange={(event) => setOverlayMode(event.target.value as OverlayMode)}
+              >
+                <option value="biomes">Biomes</option>
+                <option value="relief">Relief</option>
+                <option value="temperature">Temperature</option>
+                <option value="vegetation">Vegetation</option>
+              </select>
+            </label>
+            <label className="flex items-center justify-between gap-4">
+              <span>Zoom</span>
+              <input
+                type="range"
+                min={MIN_ZOOM}
+                max={MAX_ZOOM}
+                step={0.05}
+                value={zoom}
+                onChange={(event) => setZoom(Number(event.target.value))}
+              />
+            </label>
+          </section>
+          <section className="space-y-3 text-sm">
+            <label className="flex flex-col gap-1">
+              Map size
+              <select
+                className="input-field"
+                value={desiredSize}
+                onChange={(event) => setDesiredSize(Number(event.target.value))}
+              >
+                {MAP_SIZE_CHOICES.map((size) => (
+                  <option key={size} value={size}>
+                    {size} × {size} triangles
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" onClick={handleResizeMap} className="secondary-button">
+              Rebuild at size
+            </button>
+            <button type="button" onClick={handleNaturalizeRelief} className="secondary-button">
+              Smooth relief
+            </button>
+          </section>
+        </>
+      )}
+      {toolComplexity === "essential" && (
+        <section className="space-y-3 border-t border-grove-600/60 pt-4 text-sm">
+          <label className="flex items-center justify-between gap-4">
+            <span>Map view</span>
+            <select
+              className="input-field !w-auto !py-2"
+              value={overlayMode}
+              onChange={(event) => setOverlayMode(event.target.value as OverlayMode)}
+            >
+              <option value="biomes">Biomes</option>
+              <option value="relief">Elevation</option>
+            </select>
+          </label>
+          <label className="flex items-center justify-between gap-4">
+            <span>Zoom</span>
+            <input
+              type="range"
+              min={MIN_ZOOM}
+              max={MAX_ZOOM}
+              step={0.05}
+              value={zoom}
+              onChange={(event) => setZoom(Number(event.target.value))}
+            />
+          </label>
+        </section>
+      )}
     </div>
   );
 
@@ -1949,8 +2106,13 @@ export function WorldMapPage() {
     <div className="space-y-5 text-sm">
       <div>
         <p className="text-xs uppercase tracking-[0.3em] text-earth-sand/60 mb-3">Brush mode</p>
-        <div className="grid grid-cols-4 gap-2">
-          {(["palette", "moisture", "temperature", "vegetation"] as const).map((mode) => (
+        <div
+          className={`grid gap-2 ${toolComplexity === "advanced" ? "grid-cols-4" : "grid-cols-1"}`}
+        >
+          {(toolComplexity === "advanced"
+            ? (["palette", "moisture", "temperature", "vegetation"] as const)
+            : (["palette"] as const)
+          ).map((mode) => (
             <button
               key={mode}
               type="button"
@@ -2043,18 +2205,22 @@ export function WorldMapPage() {
           onChange={(event) => setBrushSize(Number(event.target.value))}
         />
       </label>
-      <div className="grid grid-cols-3 gap-2">
-        {CLIMATE_LAYERS.map((layer) => (
-          <button
-            key={layer.key}
-            type="button"
-            onClick={() => handleNormalizeLayer(layer.key)}
-            className="text-[11px] rounded border border-earth-clay/40 px-2 py-1"
-          >
-            Normalize {layer.label}
-          </button>
-        ))}
-      </div>
+      {toolComplexity === "advanced" && (
+        <div
+          className={`grid gap-2 ${toolComplexity === "advanced" ? "grid-cols-3" : "grid-cols-2"}`}
+        >
+          {CLIMATE_LAYERS.map((layer) => (
+            <button
+              key={layer.key}
+              type="button"
+              onClick={() => handleNormalizeLayer(layer.key)}
+              className="text-[11px] rounded border border-earth-clay/40 px-2 py-1"
+            >
+              Normalize {layer.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 
@@ -2120,12 +2286,16 @@ export function WorldMapPage() {
           </p>
         </div>
         <div className="grid grid-cols-3 gap-2">
-          {(
-            [
-              ["auto", "Auto route"],
-              ["freehand", "Freehand"],
-              ["select", "Navigate"],
-            ] as const
+          {(toolComplexity === "advanced"
+            ? ([
+                ["auto", "Auto route"],
+                ["freehand", "Freehand"],
+                ["select", "Navigate"],
+              ] as const)
+            : ([
+                ["auto", "Auto route"],
+                ["select", "Navigate"],
+              ] as const)
           ).map(([mode, label]) => (
             <button
               key={mode}
@@ -2215,30 +2385,34 @@ export function WorldMapPage() {
         </section>
       )}
 
-      <section className="space-y-3">
-        <label className="block text-xs text-slate-300">
-          Natural variation{" "}
-          <span className="float-right text-earth-sand">{Math.round(roadNaturalness * 100)}%</span>
-          <input
-            className="mt-2 w-full accent-emerald-500"
-            type="range"
-            min={0}
-            max={0.6}
-            step={0.05}
-            value={roadNaturalness}
-            onChange={(event) => setRoadNaturalness(Number(event.target.value))}
-          />
-        </label>
-        <label className="flex min-h-11 items-center justify-between rounded-xl border border-grove-600/70 bg-grove-800/25 px-3 text-xs text-slate-300">
-          Allow short bridges
-          <input
-            className="h-4 w-4 accent-emerald-500"
-            type="checkbox"
-            checked={allowBridges}
-            onChange={(event) => setAllowBridges(event.target.checked)}
-          />
-        </label>
-      </section>
+      {toolComplexity === "advanced" && (
+        <section className="space-y-3">
+          <label className="block text-xs text-slate-300">
+            Natural variation{" "}
+            <span className="float-right text-earth-sand">
+              {Math.round(roadNaturalness * 100)}%
+            </span>
+            <input
+              className="mt-2 w-full accent-emerald-500"
+              type="range"
+              min={0}
+              max={0.6}
+              step={0.05}
+              value={roadNaturalness}
+              onChange={(event) => setRoadNaturalness(Number(event.target.value))}
+            />
+          </label>
+          <label className="flex min-h-11 items-center justify-between rounded-xl border border-grove-600/70 bg-grove-800/25 px-3 text-xs text-slate-300">
+            Allow short bridges
+            <input
+              className="h-4 w-4 accent-emerald-500"
+              type="checkbox"
+              checked={allowBridges}
+              onChange={(event) => setAllowBridges(event.target.checked)}
+            />
+          </label>
+        </section>
+      )}
 
       {roadReport && (
         <div className="status-info text-xs leading-5" role="status">
@@ -2337,8 +2511,7 @@ export function WorldMapPage() {
           >
             <p className="text-sm font-semibold">{city.name}</p>
             <p className="text-xs capitalize text-earth-sand/70">
-              {city.kind ?? "settlement"} · {(city.x * mapState.width).toFixed(1)},{" "}
-              {(city.y * mapState.height).toFixed(1)}
+              {city.kind ?? "settlement"} · {triangleCellLabel(mapState, city)}
             </p>
           </button>
         ))}
@@ -2456,8 +2629,7 @@ export function WorldMapPage() {
             >
               <p className="text-sm font-semibold">{city.name}</p>
               <p className="text-xs text-earth-sand/70">
-                {(city.x * (mapState?.width ?? 0)).toFixed(1)} |{" "}
-                {(city.y * (mapState?.height ?? 0)).toFixed(1)}
+                {mapState ? triangleCellLabel(mapState, city) : "Unknown triangle"}
               </p>
             </button>
           ))}
@@ -2491,9 +2663,25 @@ export function WorldMapPage() {
     return (
       <div
         role="status"
-        className="h-full w-full flex items-center justify-center text-earth-sand/70"
+        aria-live="polite"
+        className="flex h-full w-full items-center justify-center bg-[#050c08] px-6 pt-[4.75rem] text-slate-200"
       >
-        Loading map…
+        <div className="glass-panel w-full max-w-md p-7 text-center">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-brand/35 bg-brand/10">
+            <span className="loading-dot !mr-0" aria-hidden="true" />
+          </div>
+          <p className="section-label mt-5">World Map Studio</p>
+          <h2 className="mt-2 font-display text-2xl font-semibold text-brand-glow">
+            Preparing your map
+          </h2>
+          <p className="mt-3 text-sm text-slate-300">{loadStage}</p>
+          <div className="mt-6 h-1.5 overflow-hidden rounded-full bg-grove-800">
+            <div className="h-full w-2/3 animate-pulse rounded-full bg-brand" />
+          </div>
+          <p className="mt-4 text-xs leading-5 text-slate-400">
+            Terrain preparation runs away from the interface so this screen stays responsive.
+          </p>
+        </div>
       </div>
     );
   }
@@ -2548,10 +2736,7 @@ export function WorldMapPage() {
             <button
               type="button"
               aria-pressed={!compiledView}
-              onClick={() => {
-                compiledPreferenceRef.current = true;
-                setCompiledView(false);
-              }}
+              onClick={() => setCompiledView(false)}
               className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${!compiledView ? "bg-brand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
             >
               Edit
@@ -2560,10 +2745,7 @@ export function WorldMapPage() {
               type="button"
               aria-pressed={compiledView}
               disabled={!compiledAvailable}
-              onClick={() => {
-                compiledPreferenceRef.current = true;
-                setCompiledView(true);
-              }}
+              onClick={() => setCompiledView(true)}
               className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${compiledView ? "bg-brand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
             >
               Presentation
@@ -2575,7 +2757,7 @@ export function WorldMapPage() {
             aria-label="Undo map edit"
             title="Undo"
             onClick={handleUndo}
-            disabled={!undoStack.length || compiledView || saving || compiling}
+            disabled={!undoStack.length || compiledView || mutationPending}
           >
             ↶
           </button>
@@ -2585,7 +2767,7 @@ export function WorldMapPage() {
             aria-label="Redo map edit"
             title="Redo"
             onClick={handleRedo}
-            disabled={!redoStack.length || compiledView || saving || compiling}
+            disabled={!redoStack.length || compiledView || mutationPending}
           >
             ↷
           </button>
@@ -2593,7 +2775,7 @@ export function WorldMapPage() {
             type="button"
             className="secondary-button min-h-11 whitespace-nowrap"
             onClick={handleCompileMap}
-            disabled={saving || compiling}
+            disabled={mutationPending}
           >
             {compiling
               ? "Rendering…"
@@ -2605,7 +2787,7 @@ export function WorldMapPage() {
             type="button"
             className="primary-button min-h-11 whitespace-nowrap"
             onClick={handleSaveMap}
-            disabled={saving || compiling || !dirty}
+            disabled={mutationPending || !dirty}
           >
             {saving ? "Saving…" : "Save map"}
           </button>
@@ -2642,24 +2824,59 @@ export function WorldMapPage() {
             </div>
             {sidebarOpen ? (
               <div className="flex flex-1 min-h-0 flex-col">
+                {!compiledView && (
+                  <div className="border-b border-grove-600/60 p-3">
+                    <div
+                      className="grid grid-cols-2 rounded-xl border border-grove-600 bg-grove-950/70 p-1"
+                      role="group"
+                      aria-label="Tool detail level"
+                    >
+                      {(["essential", "advanced"] as const).map((level) => (
+                        <button
+                          key={level}
+                          type="button"
+                          aria-pressed={toolComplexity === level}
+                          onClick={() => {
+                            setToolComplexity(level);
+                            setToolGroup("general");
+                            setRoadDraftStart(null);
+                            if (level === "essential") {
+                              setBiomeToolMode("palette");
+                              setRoadToolMode("auto");
+                            }
+                          }}
+                          className={`min-h-9 rounded-lg px-3 text-xs font-semibold ${toolComplexity === level ? "bg-brand text-grove-950" : "text-slate-300 hover:bg-grove-700"}`}
+                        >
+                          {level === "essential" ? "Essential" : "Advanced"}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-2 px-1 text-[11px] leading-4 text-slate-400">
+                      {toolComplexity === "essential"
+                        ? "Core map-making steps with safe defaults."
+                        : "Direct climate, terrain, road, and map controls."}
+                    </p>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2 border-b border-grove-600/60 p-3">
-                  {(Object.entries(TOOL_GROUP_LABELS) as [ToolGroup, string][]).map(
-                    ([key, label]) => (
-                      <button
-                        key={key}
-                        type="button"
-                        aria-pressed={toolGroup === key}
-                        onClick={() => setToolGroup(key)}
-                        className={`min-h-10 rounded-xl border px-3 py-2 text-xs font-semibold ${
-                          toolGroup === key
-                            ? "bg-brand text-black font-semibold"
-                            : "border-grove-600 bg-grove-800/25 text-slate-300 hover:bg-grove-700"
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ),
-                  )}
+                  {(toolComplexity === "essential"
+                    ? ESSENTIAL_TOOL_GROUPS
+                    : ADVANCED_TOOL_GROUPS
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      aria-pressed={toolGroup === key}
+                      onClick={() => setToolGroup(key)}
+                      className={`min-h-10 rounded-xl border px-3 py-2 text-xs font-semibold ${
+                        toolGroup === key
+                          ? "bg-brand text-black font-semibold"
+                          : "border-grove-600 bg-grove-800/25 text-slate-300 hover:bg-grove-700"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
                 <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">{renderPanel()}</div>
               </div>
@@ -2698,7 +2915,7 @@ export function WorldMapPage() {
                 style={{
                   cursor: cursorStyle,
                   opacity: compiledView ? 0 : 1,
-                  pointerEvents: "auto",
+                  pointerEvents: mutationPending ? "none" : "auto",
                   touchAction: "none",
                 }}
                 onPointerDown={handlePointerDown}
@@ -2736,10 +2953,32 @@ export function WorldMapPage() {
                     ? "Presentation preview — navigation only"
                     : `Primary: ${PRIMARY_ACTION_LABEL[primaryAction]}  |  Secondary: Pan`}
                 </p>
-                <p>View: Top-down</p>
+                <p>Top-down · triangular terrain grid</p>
                 {compiledView && compiledTimestamp && <p>Last baked: {compiledTimestamp}</p>}
                 {roadDraftStart && <p>Road anchor: {roadDraftStart.label}</p>}
               </div>
+              {mutationPending && (
+                <div
+                  className="absolute inset-0 z-30 flex items-center justify-center bg-grove-950/65 px-6 backdrop-blur-sm"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <div className="glass-panel w-full max-w-sm p-6 text-center shadow-2xl">
+                    <span className="loading-dot" aria-hidden="true" />
+                    <p className="mt-3 font-display text-lg font-semibold text-brand-glow">
+                      {processing ??
+                        (saving
+                          ? "Saving world map…"
+                          : compiling
+                            ? "Rendering presentation…"
+                            : "Saving city plan…")}
+                    </p>
+                    <p className="mt-2 text-xs leading-5 text-slate-300">
+                      Keep this view open until the operation finishes.
+                    </p>
+                  </div>
+                </div>
+              )}
               {statusMessage && (
                 <div
                   role="status"
@@ -2776,7 +3015,7 @@ export function WorldMapPage() {
           · right-drag to pan
         </span>
         <span>
-          {mapState.width}×{mapState.height} · {mapState.cities.length} location
+          {mapState.width}×{mapState.height} triangles · {mapState.cities.length} location
           {mapState.cities.length === 1 ? "" : "s"} · {mapState.roads.length} road
           {mapState.roads.length === 1 ? "" : "s"} · {Math.round(zoom * 100)}%
         </span>

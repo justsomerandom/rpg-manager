@@ -2,20 +2,27 @@ import type { MapState } from "../../../api/worldMap";
 import { DEFAULT_WATER_LEVEL, MAP_DEFAULT_SIZE } from "./constants";
 import type { MapStateExtended } from "./types";
 import { clamp, fbm } from "./math";
+import {
+  normalizedPointToTriangleCell,
+  triangleCellCenterNormalized,
+  triangleCellNeighbors,
+} from "./triangleGrid";
 
 export function smoothLayer(values: number[], width: number, height: number, passes = 1) {
   let current = [...values];
   for (let pass = 0; pass < passes; pass += 1) {
     const next = current.slice();
-    for (let y = 1; y < height - 1; y += 1) {
-      for (let x = 1; x < width - 1; x += 1) {
-        let total = 0;
-        for (let dy = -1; dy <= 1; dy += 1) {
-          for (let dx = -1; dx <= 1; dx += 1) {
-            total += current[(y + dy) * width + (x + dx)];
-          }
+    for (let row = 0; row < height; row += 1) {
+      for (let column = 0; column < width; column += 1) {
+        const index = row * width + column;
+        const neighbors = triangleCellNeighbors(column, row, width, height);
+        let total = current[index] * 2;
+        let weight = 2;
+        for (const neighbor of neighbors) {
+          total += current[neighbor.index];
+          weight += 1;
         }
-        next[y * width + x] = total / 9;
+        next[index] = total / weight;
       }
     }
     current = next;
@@ -27,8 +34,9 @@ export function generateTemperatureLayer(width: number, height: number, seed: nu
   const layer: number[] = new Array(width * height);
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
-      const nx = x / Math.max(1, width - 1) - 0.5;
-      const ny = y / Math.max(1, height - 1) - 0.5;
+      const center = triangleCellCenterNormalized(x, y, width, height);
+      const nx = center.x - 0.5;
+      const ny = center.y - 0.5;
       const base = 0.6 - Math.abs(ny) * 0.7;
       const noiseValue = fbm(nx * 3 + 50, ny * 3 - 50, seed + 517);
       layer[y * width + x] = clamp(base + noiseValue * 0.35);
@@ -47,8 +55,9 @@ export function generateVegetationLayer(
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const idx = y * width + x;
-      const nx = x / Math.max(1, width - 1) - 0.5;
-      const ny = y / Math.max(1, height - 1) - 0.5;
+      const center = triangleCellCenterNormalized(x, y, width, height);
+      const nx = center.x - 0.5;
+      const ny = center.y - 0.5;
       const noiseValue = fbm(nx * 4 - 80, ny * 4 + 120, seed + 733);
       const base =
         (Number.isFinite(moisture[idx]) ? moisture[idx] : 0.5) * 0.6 +
@@ -86,8 +95,9 @@ export function generateProceduralMap(
   const moisture: number[] = new Array(width * height);
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
-      const nx = x / Math.max(1, width - 1) - 0.5;
-      const ny = y / Math.max(1, height - 1) - 0.5;
+      const center = triangleCellCenterNormalized(x, y, width, height);
+      const nx = center.x - 0.5;
+      const ny = center.y - 0.5;
       const distance = Math.sqrt(nx * nx + ny * ny);
       const elevation = fbm(nx * 4, ny * 4, safeSeed) - distance * 0.7;
       const moistureValue = fbm(nx * 6 + 100, ny * 6 + 200, safeSeed + 1337);
@@ -99,6 +109,7 @@ export function generateProceduralMap(
   const temperature = generateTemperatureLayer(width, height, safeSeed + 321);
   const vegetation = generateVegetationLayer(width, height, safeSeed + 555, moisture);
   return {
+    grid_kind: "triangle",
     width,
     height,
     relief: smoothLayer(relief, width, height, 2),
@@ -152,23 +163,26 @@ export function ensureExtendedMap(map: MapState): MapStateExtended {
     0.05,
     0.95,
   );
-  const fallback = generateProceduralMap(seed, waterLevel, width, height);
-  const sanitizeLayer = (values: unknown, fallbackValues: number[]) =>
-    Array.isArray(values) && values.length === total
-      ? values.map((value, index) =>
-          typeof value === "number" && Number.isFinite(value)
-            ? clamp(value)
-            : fallbackValues[index],
-        )
-      : fallbackValues;
-  const relief = sanitizeLayer(map.relief, fallback.relief);
-  const moisture = sanitizeLayer(map.moisture, fallback.moisture);
-  const temperature = sanitizeLayer(
-    extended.temperature,
+  let generatedFallback: MapStateExtended | null = null;
+  const generated = () => {
+    generatedFallback ??= generateProceduralMap(seed, waterLevel, width, height);
+    return generatedFallback;
+  };
+  const sanitizeLayer = (values: unknown, fallbackValues: () => number[]) => {
+    if (!Array.isArray(values) || values.length !== total) return fallbackValues();
+    let fallback: number[] | null = null;
+    return values.map((value, index) => {
+      if (typeof value === "number" && Number.isFinite(value)) return clamp(value);
+      fallback ??= fallbackValues();
+      return fallback[index];
+    });
+  };
+  const relief = sanitizeLayer(map.relief, () => generated().relief);
+  const moisture = sanitizeLayer(map.moisture, () => generated().moisture);
+  const temperature = sanitizeLayer(extended.temperature, () =>
     generateTemperatureLayer(width, height, seed + 777),
   );
-  const vegetation = sanitizeLayer(
-    extended.vegetation,
+  const vegetation = sanitizeLayer(extended.vegetation, () =>
     generateVegetationLayer(width, height, seed + 999, moisture),
   );
   const compiledImage = (value: unknown) =>
@@ -184,10 +198,9 @@ export function ensureExtendedMap(map: MapState): MapStateExtended {
   const locationKinds = new Set(["settlement", "port", "fortress", "ruin", "landmark"]);
   const cities = rawCities.flatMap((city, index) => {
     if (!city || !Number.isFinite(city.x) || !Number.isFinite(city.y)) return [];
-    const x = clamp(city.x, 0.5 / width, 1 - 0.5 / width);
-    const y = clamp(city.y, 0.5 / height, 1 - 0.5 / height);
-    const gridX = clamp(Math.floor(x * width), 0, width - 1);
-    const gridY = clamp(Math.floor(y * height), 0, height - 1);
+    const x = clamp(city.x);
+    const y = clamp(city.y);
+    const cell = normalizedPointToTriangleCell({ x, y }, width, height);
     return [
       {
         id: typeof city.id === "string" && city.id ? city.id.slice(0, 128) : `city-${index}`,
@@ -200,7 +213,7 @@ export function ensureExtendedMap(map: MapState): MapStateExtended {
         y,
         elevation: Number.isFinite(city.elevation)
           ? clamp(city.elevation)
-          : (relief[gridY * width + gridX] ?? 0),
+          : (relief[cell.index] ?? 0),
         population: Number.isFinite(city.population) ? Math.max(0, Math.round(city.population)) : 0,
       },
     ];
@@ -239,6 +252,7 @@ export function ensureExtendedMap(map: MapState): MapStateExtended {
   });
   return {
     ...map,
+    grid_kind: "triangle",
     width,
     height,
     seed,

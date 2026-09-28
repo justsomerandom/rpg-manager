@@ -1,5 +1,15 @@
 import { computeBiome } from "./biome";
 import { clamp, pseudoRandom } from "./math";
+import {
+  normalizedPointToTriangleCell,
+  normalizedToTriangleGridPoint,
+  triangleCellCenterGrid,
+  triangleCellCenterNormalized,
+  triangleCellNeighbors,
+  triangleGridPointToNormalized,
+  TRIANGLE_CENTROID_SPACING,
+  TRIANGLE_HEIGHT_RATIO,
+} from "./triangleGrid";
 import type { Biome, MapStateExtended, NetworkAnchor, PixelPoint } from "./types";
 
 /**
@@ -114,23 +124,22 @@ type TraversalAnalysis = {
   maxRelief: number;
 };
 
-const SQRT_2 = Math.SQRT2;
 const EPSILON = 1e-9;
 const MAX_FREEHAND_ANCHORS = 128;
+const HEADING_COUNT = 6;
+const STATE_DIRECTION_SLOTS = HEADING_COUNT + 1;
 // Weighted A* keeps interactive routes responsive. The value remains below the
 // normal cost of open terrain, while allowing an existing-road discount to win.
 const HEURISTIC_STEP_COST = 0.68;
 const HEURISTIC_WEIGHT = 1.12;
 
-const DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
-  [1, 0],
-  [1, 1],
-  [0, 1],
-  [-1, 1],
-  [-1, 0],
-  [-1, -1],
-  [0, -1],
-  [1, -1],
+const HEADING_VECTORS: ReadonlyArray<readonly [number, number]> = [
+  [0.5, TRIANGLE_HEIGHT_RATIO / 3],
+  [0, (TRIANGLE_HEIGHT_RATIO * 2) / 3],
+  [-0.5, TRIANGLE_HEIGHT_RATIO / 3],
+  [-0.5, -TRIANGLE_HEIGHT_RATIO / 3],
+  [0, (-TRIANGLE_HEIGHT_RATIO * 2) / 3],
+  [0.5, -TRIANGLE_HEIGHT_RATIO / 3],
 ];
 
 const BIOME_TRAVERSAL_COST: Record<Biome, number> = {
@@ -314,11 +323,11 @@ export function samplePolyline(points: readonly PixelPoint[], spacing: number): 
 }
 
 function toGridPoint(point: PixelPoint, width: number, height: number): PixelPoint {
-  return { x: point.x * width, y: point.y * height };
+  return normalizedToTriangleGridPoint(point, width, height);
 }
 
 function fromGridPoint(point: PixelPoint, width: number, height: number): PixelPoint {
-  return { x: clamp(point.x / width, 0, 1), y: clamp(point.y / height, 0, 1) };
+  return triangleGridPointToNormalized(point, width, height);
 }
 
 function simplifyInGridSpace(
@@ -360,7 +369,7 @@ function resolveOptions(
   cellCount: number,
 ): ResolvedRoadRoutingOptions {
   const waterLevel = Number.isFinite(map.water_level) ? clamp(map.water_level, 0, 1) : 0.42;
-  const maxStates = Math.max(1_024, cellCount * 9 * 17);
+  const maxStates = Math.max(1_024, cellCount * STATE_DIRECTION_SLOTS * 17);
   const naturalSeed = Number.isFinite(options?.seed)
     ? (options?.seed as number)
     : Number.isFinite(map.seed)
@@ -408,9 +417,7 @@ function resolveOptions(
 }
 
 function cellIndexForPoint(point: PixelPoint, width: number, height: number): number {
-  const x = Math.round(clamp(point.x * width - 0.5, 0, width - 1));
-  const y = Math.round(clamp(point.y * height - 0.5, 0, height - 1));
-  return y * width + x;
+  return normalizedPointToTriangleCell(point, width, height).index;
 }
 
 function rasterizeSegment(
@@ -419,27 +426,63 @@ function rasterizeSegment(
   width: number,
   height: number,
 ): number[] {
-  const startX = clamp(start.x * width - 0.5, 0, width - 1);
-  const startY = clamp(start.y * height - 0.5, 0, height - 1);
-  const endX = clamp(end.x * width - 0.5, 0, width - 1);
-  const endY = clamp(end.y * height - 0.5, 0, height - 1);
+  const gridStart = normalizedToTriangleGridPoint(start, width, height);
+  const gridEnd = normalizedToTriangleGridPoint(end, width, height);
   const steps = Math.max(
     1,
-    Math.ceil(Math.max(Math.abs(endX - startX), Math.abs(endY - startY)) * 2),
+    Math.ceil(
+      (Math.hypot(gridEnd.x - gridStart.x, gridEnd.y - gridStart.y) / TRIANGLE_CENTROID_SPACING) *
+        2,
+    ),
   );
   const cells: number[] = [];
   let previous = -1;
   for (let step = 0; step <= steps; step += 1) {
     const t = step / steps;
-    const x = Math.round(startX + (endX - startX) * t);
-    const y = Math.round(startY + (endY - startY) * t);
-    const index = y * width + x;
+    const index = cellIndexForPoint(
+      { x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t },
+      width,
+      height,
+    );
     if (index !== previous) {
       cells.push(index);
       previous = index;
     }
   }
   return cells;
+}
+
+function buildCellDistanceField(
+  sourceCells: readonly number[],
+  width: number,
+  height: number,
+): Float32Array | null {
+  if (!sourceCells.length) return null;
+  const field = new Float32Array(width * height);
+  field.fill(Number.POSITIVE_INFINITY);
+  const queue = new Int32Array(width * height);
+  let head = 0;
+  let tail = 0;
+  for (const cell of sourceCells) {
+    if (cell < 0 || cell >= field.length || field[cell] === 0) continue;
+    field[cell] = 0;
+    queue[tail] = cell;
+    tail += 1;
+  }
+  while (head < tail) {
+    const cell = queue[head];
+    head += 1;
+    const column = cell % width;
+    const row = Math.floor(cell / width);
+    const nextDistance = field[cell] + 1;
+    for (const neighbor of triangleCellNeighbors(column, row, width, height)) {
+      if (field[neighbor.index] <= nextDistance) continue;
+      field[neighbor.index] = nextDistance;
+      queue[tail] = neighbor.index;
+      tail += 1;
+    }
+  }
+  return field;
 }
 
 function rasterizePolyline(points: readonly PixelPoint[], width: number, height: number): number[] {
@@ -461,40 +504,7 @@ function buildDistanceField(
   height: number,
 ): Float32Array | null {
   const cells = rasterizePolyline(points, width, height);
-  if (!cells.length) return null;
-  const field = new Float32Array(width * height);
-  field.fill(Number.POSITIVE_INFINITY);
-  for (const cell of cells) field[cell] = 0;
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const index = y * width + x;
-      let distance = field[index];
-      if (x > 0) distance = Math.min(distance, field[index - 1] + 1);
-      if (y > 0) distance = Math.min(distance, field[index - width] + 1);
-      if (x > 0 && y > 0) distance = Math.min(distance, field[index - width - 1] + SQRT_2);
-      if (x + 1 < width && y > 0) {
-        distance = Math.min(distance, field[index - width + 1] + SQRT_2);
-      }
-      field[index] = distance;
-    }
-  }
-  for (let y = height - 1; y >= 0; y -= 1) {
-    for (let x = width - 1; x >= 0; x -= 1) {
-      const index = y * width + x;
-      let distance = field[index];
-      if (x + 1 < width) distance = Math.min(distance, field[index + 1] + 1);
-      if (y + 1 < height) distance = Math.min(distance, field[index + width] + 1);
-      if (x + 1 < width && y + 1 < height) {
-        distance = Math.min(distance, field[index + width + 1] + SQRT_2);
-      }
-      if (x > 0 && y + 1 < height) {
-        distance = Math.min(distance, field[index + width - 1] + SQRT_2);
-      }
-      field[index] = distance;
-    }
-  }
-  return field;
+  return buildCellDistanceField(cells, width, height);
 }
 
 function buildExistingRoadDistance(
@@ -502,46 +512,13 @@ function buildExistingRoadDistance(
   width: number,
   height: number,
 ): Float32Array | null {
-  const field = new Float32Array(width * height);
-  field.fill(Number.POSITIVE_INFINITY);
-  let hasRoad = false;
+  const cells = new Set<number>();
   for (const road of map.roads) {
     const points = sanitizeBoundedPolyline(road.points).points;
     if (points.length < 2) continue;
-    hasRoad = true;
-    for (const cell of rasterizePolyline(points, width, height)) field[cell] = 0;
+    for (const cell of rasterizePolyline(points, width, height)) cells.add(cell);
   }
-  if (!hasRoad) return null;
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const index = y * width + x;
-      let distance = field[index];
-      if (x > 0) distance = Math.min(distance, field[index - 1] + 1);
-      if (y > 0) distance = Math.min(distance, field[index - width] + 1);
-      if (x > 0 && y > 0) distance = Math.min(distance, field[index - width - 1] + SQRT_2);
-      if (x + 1 < width && y > 0) {
-        distance = Math.min(distance, field[index - width + 1] + SQRT_2);
-      }
-      field[index] = distance;
-    }
-  }
-  for (let y = height - 1; y >= 0; y -= 1) {
-    for (let x = width - 1; x >= 0; x -= 1) {
-      const index = y * width + x;
-      let distance = field[index];
-      if (x + 1 < width) distance = Math.min(distance, field[index + 1] + 1);
-      if (y + 1 < height) distance = Math.min(distance, field[index + width] + 1);
-      if (x + 1 < width && y + 1 < height) {
-        distance = Math.min(distance, field[index + width + 1] + SQRT_2);
-      }
-      if (x > 0 && y + 1 < height) {
-        distance = Math.min(distance, field[index + width - 1] + SQRT_2);
-      }
-      field[index] = distance;
-    }
-  }
-  return field;
+  return buildCellDistanceField([...cells], width, height);
 }
 
 function createRoutingContext(
@@ -669,27 +646,26 @@ function stateIdFor(
   direction: number,
   maxBridgeCells: number,
 ): number {
-  return (cellIndex * (maxBridgeCells + 1) + waterRun) * 9 + direction + 1;
+  return (cellIndex * (maxBridgeCells + 1) + waterRun) * STATE_DIRECTION_SLOTS + direction + 1;
 }
 
 function cellIndexFromState(stateId: number, maxBridgeCells: number): number {
-  return Math.floor(Math.floor(stateId / 9) / (maxBridgeCells + 1));
+  return Math.floor(Math.floor(stateId / STATE_DIRECTION_SLOTS) / (maxBridgeCells + 1));
 }
 
-function octileDistance(x: number, y: number, goalX: number, goalY: number): number {
-  const dx = Math.abs(goalX - x);
-  const dy = Math.abs(goalY - y);
-  const diagonal = Math.min(dx, dy);
-  return Math.max(dx, dy) + (SQRT_2 - 1) * diagonal;
+function triangleHeuristic(x: number, y: number, goalX: number, goalY: number): number {
+  const current = triangleCellCenterGrid(x, y);
+  const goal = triangleCellCenterGrid(goalX, goalY);
+  return Math.hypot(goal.x - current.x, goal.y - current.y) / TRIANGLE_CENTROID_SPACING;
 }
 
 function headingPenalty(previousDirection: number, nextDirection: number, weight: number): number {
   if (previousDirection < 0 || previousDirection === nextDirection || weight <= 0) return 0;
-  const previous = DIRECTIONS[previousDirection];
-  const next = DIRECTIONS[nextDirection];
-  const previousLength = previous[0] !== 0 && previous[1] !== 0 ? SQRT_2 : 1;
-  const nextLength = next[0] !== 0 && next[1] !== 0 ? SQRT_2 : 1;
-  const cosine = (previous[0] * next[0] + previous[1] * next[1]) / (previousLength * nextLength);
+  const previous = HEADING_VECTORS[previousDirection];
+  const next = HEADING_VECTORS[nextDirection];
+  const cosine =
+    (previous[0] * next[0] + previous[1] * next[1]) /
+    (TRIANGLE_CENTROID_SPACING * TRIANGLE_CENTROID_SPACING);
   return weight * (1 - clamp(cosine, -1, 1));
 }
 
@@ -723,7 +699,7 @@ function routeSearch(
   const open = new SearchHeap();
   const startState = stateIdFor(startCell, startWaterRun, -1, options.maxBridgeCells);
   const initialHeuristic =
-    octileDistance(startX, startY, goalX, goalY) * HEURISTIC_STEP_COST * HEURISTIC_WEIGHT;
+    triangleHeuristic(startX, startY, goalX, goalY) * HEURISTIC_STEP_COST * HEURISTIC_WEIGHT;
   gScore.set(startState, 0);
   open.push({
     stateId: startState,
@@ -755,10 +731,9 @@ function routeSearch(
       let state: number | undefined = current.stateId;
       while (state !== undefined) {
         const cell = cellIndexFromState(state, options.maxBridgeCells);
-        reversed.push({
-          x: ((cell % width) + 0.5) / width,
-          y: (Math.floor(cell / width) + 0.5) / height,
-        });
+        reversed.push(
+          triangleCellCenterNormalized(cell % width, Math.floor(cell / width), width, height),
+        );
         state = cameFrom.get(state);
       }
       const points = reversed.reverse();
@@ -768,24 +743,14 @@ function routeSearch(
     }
 
     const currentRelief = context.relief[currentCell];
-    for (let direction = 0; direction < DIRECTIONS.length; direction += 1) {
-      const [dx, dy] = DIRECTIONS[direction];
-      const x = current.x + dx;
-      const y = current.y + dy;
-      if (x < 0 || y < 0 || x >= width || y >= height) continue;
-      const cell = y * width + x;
+    for (const neighbor of triangleCellNeighbors(current.x, current.y, width, height)) {
+      const { column: x, row: y, index: cell, heading: direction } = neighbor;
       if (context.invalidTerrain[cell]) continue;
-      const diagonal = dx !== 0 && dy !== 0;
-      if (diagonal && !context.water[cell]) {
-        const sideA = current.y * width + x;
-        const sideB = y * width + current.x;
-        if (context.water[sideA] && context.water[sideB]) continue;
-      }
 
       const isWater = context.water[cell] === 1;
       const waterRun = isWater ? current.waterRun + 1 : 0;
       if (waterRun > options.maxBridgeCells) continue;
-      const stepDistance = diagonal ? SQRT_2 : 1;
+      const stepDistance = 1;
       const relief = context.relief[cell];
       const grade = Math.abs(relief - currentRelief) / stepDistance;
       const coherentNoise = pseudoRandom(x / 3.2, y / 3.2, options.seed + 71) - 0.5;
@@ -845,7 +810,8 @@ function routeSearch(
 
       gScore.set(stateId, tentativeG);
       cameFrom.set(stateId, current.stateId);
-      const heuristic = octileDistance(x, y, goalX, goalY) * HEURISTIC_STEP_COST * HEURISTIC_WEIGHT;
+      const heuristic =
+        triangleHeuristic(x, y, goalX, goalY) * HEURISTIC_STEP_COST * HEURISTIC_WEIGHT;
       open.push({
         stateId,
         x,
@@ -886,12 +852,7 @@ function analyzeTraversal(
       waterRun = 0;
     }
     if (previousCell >= 0) {
-      const previousX = previousCell % context.width;
-      const previousY = Math.floor(previousCell / context.width);
-      const x = cell % context.width;
-      const y = Math.floor(cell / context.width);
-      const step = Math.max(1, Math.hypot(x - previousX, y - previousY));
-      maxGrade = Math.max(maxGrade, Math.abs(relief - context.relief[previousCell]) / step);
+      maxGrade = Math.max(maxGrade, Math.abs(relief - context.relief[previousCell]));
     }
     previousCell = cell;
   }
@@ -905,10 +866,10 @@ function polylineDistanceCells(
 ): number {
   let distance = 0;
   for (let index = 1; index < points.length; index += 1) {
-    distance += Math.hypot(
-      (points[index].x - points[index - 1].x) * width,
-      (points[index].y - points[index - 1].y) * height,
-    );
+    const current = normalizedToTriangleGridPoint(points[index], width, height);
+    const previous = normalizedToTriangleGridPoint(points[index - 1], width, height);
+    distance +=
+      Math.hypot(current.x - previous.x, current.y - previous.y) / TRIANGLE_CENTROID_SPACING;
   }
   return distance;
 }

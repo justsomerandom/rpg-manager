@@ -96,6 +96,8 @@ pub struct MapRoad {
 
 #[derive(Serialize, Deserialize)]
 pub struct MapState {
+    #[serde(default = "default_world_grid_kind")]
+    pub grid_kind: String,
     pub width: u32,
     pub height: u32,
     pub relief: Vec<f32>,
@@ -116,6 +118,14 @@ pub struct MapState {
 
 impl MapState {
     pub fn normalize_and_validate(&mut self) -> Result<(), String> {
+        if self.grid_kind == "legacy-square" {
+            self.grid_kind = "triangle".into();
+            self.compiled_grid = None;
+            self.compiled_updated_at = None;
+        }
+        if self.grid_kind != "triangle" {
+            return Err("World maps must use the triangular grid".into());
+        }
         let cell_count = (self.width as usize)
             .checked_mul(self.height as usize)
             .ok_or_else(|| "Map dimensions are too large".to_owned())?;
@@ -636,6 +646,9 @@ impl CityMap {
 fn default_city_scale() -> f64 {
     1.0
 }
+fn default_world_grid_kind() -> String {
+    "legacy-square".into()
+}
 fn default_map_location_kind() -> String {
     "settlement".into()
 }
@@ -749,6 +762,7 @@ mod tests {
 
     fn valid_map() -> MapState {
         MapState {
+            grid_kind: "triangle".into(),
             width: 8,
             height: 8,
             relief: vec![0.1; 64],
@@ -769,6 +783,32 @@ mod tests {
         let mut map = valid_map();
         map.relief.pop();
         assert!(map.normalize_and_validate().is_err());
+    }
+
+    #[test]
+    fn map_requires_the_triangular_grid() {
+        let mut map = valid_map();
+        map.grid_kind = "square".into();
+        assert!(map.normalize_and_validate().is_err());
+    }
+
+    #[test]
+    fn legacy_map_migrates_and_discards_its_square_preview() {
+        let mut value = serde_json::to_value(valid_map()).expect("serialize map");
+        let object = value.as_object_mut().expect("map object");
+        object.remove("grid_kind");
+        object.insert(
+            "compiled_grid".into(),
+            serde_json::Value::String("data:image/png;base64,AAAA".into()),
+        );
+        object.insert("compiled_updated_at".into(), serde_json::Value::from(42));
+        let mut map: MapState = serde_json::from_value(value).expect("deserialize legacy map");
+
+        map.normalize_and_validate().expect("migrate legacy map");
+
+        assert_eq!(map.grid_kind, "triangle");
+        assert!(map.compiled_grid.is_none());
+        assert!(map.compiled_updated_at.is_none());
     }
 
     #[test]

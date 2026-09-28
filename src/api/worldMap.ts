@@ -25,6 +25,7 @@ export type MapRoad = {
 };
 
 export type MapState = {
+  grid_kind?: "triangle";
   width: number;
   height: number;
   relief: number[];

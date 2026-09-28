@@ -36,6 +36,7 @@ export type Biome =
   | "snow";
 
 export type ToolGroup = "general" | "relief" | "biome" | "roads" | "locations";
+export type ToolComplexity = "essential" | "advanced";
 export type BiomeToolMode = "palette" | "moisture" | "temperature" | "vegetation";
 export type ClimateTarget = "moisture" | "temperature" | "vegetation";
 export type PrimaryAction =
@@ -62,6 +63,7 @@ export type NetworkAnchor = PixelPoint & {
 };
 
 export type MapStateExtended = MapState & {
+  grid_kind: "triangle";
   temperature: number[];
   vegetation: number[];
   compiled_grid?: string;
