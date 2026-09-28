@@ -16,7 +16,7 @@ There is no server, account, telemetry, cloud sync, or multiplayer layer. A `Wor
 - **Characters:** a world roster with editable notes and values rendered from the saved character-sheet template.
 - **Index:** SQLite-backed searchable codex entries with categories, tags, full text, editing, deletion, and non-destructive migration from the former browser-storage format.
 - **Lore:** editable books and chapters with selection guards and confirmed deletion.
-- **World maps:** deterministic terrain generation, environmental layers, top-down brush tools, grids, cities, roads, safe source saves, and compiled presentation previews.
+- **World maps:** deterministic triangular terrain, responsive background generation, top-down brush tools, environmental layers, locations, terrain-aware roads, safe source saves, and compiled presentation previews.
 - **City maps:** terrain-aware procedural layouts, connected top-down streets, districts, functional civic buildings, editable geometry, and synchronized world-road approaches.
 
 ## Architecture
@@ -48,6 +48,14 @@ The repository keeps the standard Tauri project layout:
 ```
 
 `src-tauri` is Tauri's conventional application directory and is intentionally not renamed to a generic `backend` directory.
+
+## World Map Studio workflow
+
+The world editor opens in **Essential** mode. Its guided flow is to generate a terrain base, paint broad biome regions, place important sites, connect them with terrain-aware roads, and save checkpoints from the top bar. **Advanced** mode exposes direct relief, climate, map-size, water-level, road-naturalness, and bridge controls.
+
+World terrain is stored as an alternating triangular lattice. Brushes, smoothing, biome sampling, location placement, hit testing, and road routing all use triangle cells and three-edge adjacency. Older square-era maps retain their source layers, locations, and roads when opened; their stale compiled preview is discarded and can be rendered again from the migrated triangular source.
+
+Map loading, legacy normalization, and procedural generation run in a web worker so the interface remains responsive. Presentation rendering is pixel-budgeted and displays an operation overlay, but still uses the browser canvas on the UI thread because it composes image assets.
 
 ## Development
 
