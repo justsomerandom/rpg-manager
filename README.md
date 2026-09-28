@@ -53,7 +53,9 @@ The repository keeps the standard Tauri project layout:
 
 The world editor opens in **Essential** mode. Its guided flow is to generate a terrain base, paint broad biome regions, place important sites, connect them with terrain-aware roads, and save checkpoints from the top bar. **Advanced** mode exposes direct relief, climate, map-size, water-level, road-naturalness, and bridge controls.
 
-World terrain is stored as an alternating triangular lattice. Brushes, smoothing, biome sampling, location placement, hit testing, and road routing all use triangle cells and three-edge adjacency. Older square-era maps retain their source layers, locations, and roads when opened; their stale compiled preview is discarded and can be rendered again from the migrated triangular source.
+World terrain is stored as an alternating triangular lattice. New maps default to a `216 × 72` landscape lattice (approximately `1.74:1`); Advanced tools provide landscape presets and independent column/row controls up to 256 per axis and 32,768 total triangles. Brushes, smoothing, biome sampling, location placement, hit testing, and road routing all use triangle cells and three-edge adjacency. Older square-era maps retain their source layers, locations, and roads when opened; their stale compiled preview is discarded and can be rendered again from the migrated triangular source.
+
+The editor uses a subdued, low-saturation biome palette so terrain categories remain legible without pretending to be finished cartography. Compiled presentation maps use a separate render palette, icon pass, grading, and texture. Procedural terrain uses aspect-correct domain-warped continental noise, ridge fields, ocean shelves, latitude, prevailing moisture, and altitude effects.
 
 Map loading, legacy normalization, and procedural generation run in a web worker so the interface remains responsive. Presentation rendering is pixel-budgeted and displays an operation overlay, but still uses the browser canvas on the UI thread because it composes image assets.
 

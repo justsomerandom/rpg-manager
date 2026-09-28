@@ -30,6 +30,7 @@ This pass evaluated the application against the intended GM outcomes described i
 ### Map and city reliability
 
 - Hardened saved-map normalization and legacy defaults against malformed dimensions, layers, coordinates, IDs, and oversized data.
+- Added a 32,768-cell world-map budget, landscape triangular presets, independent bounded dimensions, and full-map viewport fitting.
 - Corrected map-coordinate and rendering defects, deterministic math edge cases, road routing, water placement, and city/road removal behavior.
 - Added dirty-state feedback, internal-navigation plus native-window close guards, compiled-preview invalidation, revision-aware saves, and recoverable preview-generation failures.
 - Bounded canvas pixel allocation and corrected compiled-map rendering instead of storing a transformed source image.
