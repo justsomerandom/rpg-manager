@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useBlocker, useParams } from "react-router-dom";
 import { getErrorMessage } from "../../api/client";
+import { listWorldEntries, type WorldEntry } from "../../api/worldEntries";
+import { IndexLinkedTextarea } from "../../components/IndexLinkedTextarea";
+import { IndexLinkedText } from "../../components/IndexLinkedText";
+import { indexLinkLabel } from "../../features/world-index/links";
 import {
   createLoreBook,
   createLoreEntry,
@@ -21,6 +25,8 @@ export function WorldLorePage() {
   const [books, setBooks] = useState<LoreBook[]>([]);
   const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
   const [entries, setEntries] = useState<LoreEntry[]>([]);
+  const [indexEntries, setIndexEntries] = useState<WorldEntry[]>([]);
+  const [indexEntriesError, setIndexEntriesError] = useState<string | null>(null);
 
   const [loadingBooks, setLoadingBooks] = useState(Boolean(worldId));
   const [loadingEntries, setLoadingEntries] = useState(false);
@@ -92,6 +98,28 @@ export function WorldLorePage() {
       cancelled = true;
     };
   }, [booksReloadKey, worldId]);
+
+  useEffect(() => {
+    if (!worldId) {
+      setIndexEntries([]);
+      return;
+    }
+    let cancelled = false;
+    setIndexEntriesError(null);
+    listWorldEntries(worldId)
+      .then((loadedEntries) => {
+        if (!cancelled) setIndexEntries(loadedEntries);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setIndexEntries([]);
+          setIndexEntriesError(getErrorMessage(error, "Index links are temporarily unavailable."));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [worldId]);
 
   useEffect(() => {
     setEntries([]);
@@ -389,6 +417,7 @@ export function WorldLorePage() {
           </p>
         )}
         {message && <p className="status-success">{message}</p>}
+        {indexEntriesError && <p className="status-error">{indexEntriesError}</p>}
       </div>
 
       <div className="grid items-start gap-5 lg:grid-cols-[20rem_1fr]">
@@ -448,7 +477,7 @@ export function WorldLorePage() {
                   >
                     <span className="block text-sm font-semibold text-slate-100">{book.title}</span>
                     <span className="mt-1 block text-xs text-slate-500">
-                      {book.summary || "No summary"}
+                      {indexLinkLabel(book.summary) || "No summary"}
                     </span>
                   </button>
                 </li>
@@ -479,15 +508,15 @@ export function WorldLorePage() {
               <label htmlFor="new-lore-book-summary" className="sr-only">
                 Short summary
               </label>
-              <textarea
+              <IndexLinkedTextarea
                 id="new-lore-book-summary"
                 rows={3}
-                className="input-field"
                 placeholder="What belongs in this collection?"
                 value={newBookSummary}
+                entries={indexEntries}
                 maxLength={500}
                 disabled={loadingBooks || booksLoadFailed || mutationPending}
-                onChange={(event) => setNewBookSummary(event.target.value)}
+                onChange={setNewBookSummary}
               />
             </div>
             <button
@@ -536,14 +565,14 @@ export function WorldLorePage() {
                     >
                       Summary
                     </label>
-                    <textarea
+                    <IndexLinkedTextarea
                       id="edit-lore-book-summary"
-                      className="input-field"
                       rows={3}
                       maxLength={500}
                       value={bookSummary}
+                      entries={indexEntries}
                       disabled={mutationPending}
-                      onChange={(event) => setBookSummary(event.target.value)}
+                      onChange={setBookSummary}
                     />
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -575,7 +604,11 @@ export function WorldLorePage() {
                       {selectedBook.title}
                     </h2>
                     <p className="mt-1 text-sm text-slate-400">
-                      {selectedBook.summary || "No summary yet."}
+                      {selectedBook.summary ? (
+                        <IndexLinkedText text={selectedBook.summary} />
+                      ) : (
+                        "No summary yet."
+                      )}
                     </p>
                   </div>
                   <div className="flex shrink-0 gap-2">
@@ -681,7 +714,7 @@ export function WorldLorePage() {
                           </div>
                         </header>
                         <p className="whitespace-pre-wrap text-sm leading-6 text-slate-300">
-                          {entry.content}
+                          <IndexLinkedText text={entry.content} />
                         </p>
                       </article>
                     ))}
@@ -725,16 +758,16 @@ export function WorldLorePage() {
                     >
                       Content <span aria-hidden="true">*</span>
                     </label>
-                    <textarea
+                    <IndexLinkedTextarea
                       id="lore-entry-content"
                       rows={10}
-                      className="input-field"
                       value={entryContent}
+                      entries={indexEntries}
                       maxLength={50000}
                       required
                       disabled={loadingEntries || entriesLoadFailed || mutationPending}
                       placeholder="Write the chapter or lore text here…"
-                      onChange={(event) => setEntryContent(event.target.value)}
+                      onChange={setEntryContent}
                     />
                     <p className="mt-1 text-right text-[11px] text-slate-500">
                       {entryContent.length.toLocaleString()} / 50,000

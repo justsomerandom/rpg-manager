@@ -13,9 +13,9 @@ There is no server, account, telemetry, cloud sync, or multiplayer layer. A `Wor
 ## Features
 
 - **Worlds:** atomic world/template creation, metadata editing, world listing, and confirmed cascading deletion.
-- **Characters:** a world roster with editable notes and values rendered from the saved character-sheet template.
-- **Index:** SQLite-backed searchable codex entries with categories, tags, full text, editing, deletion, and non-destructive migration from the former browser-storage format.
-- **Lore:** editable books and chapters with selection guards and confirmed deletion.
+- **Characters:** a world roster with template-driven values, long-form notes, and direct links to codex entries from item, ability, reference, and text fields.
+- **Index:** SQLite-backed searchable codex entries with categories, tags, full text, and a batched inbox for characters, map locations, city landmarks, and unresolved inline references.
+- **Lore:** editable books and chapters with inline codex links, selection guards, and confirmed deletion.
 - **World maps:** deterministic triangular terrain, responsive background generation, top-down brush tools, environmental layers, locations, terrain-aware roads, safe source saves, and compiled presentation previews.
 - **City maps:** terrain-aware procedural layouts, connected top-down streets, districts, functional civic buildings, editable geometry, and synchronized world-road approaches.
 
@@ -30,6 +30,8 @@ React route/component
 ```
 
 Relational tables store ownership and queryable records. Flexible template and map documents are serialized as JSON in SQLite. Backend commands validate identifiers, text sizes, JSON structure, map dimensions, coordinates, collection sizes, and ownership before writing.
+
+Character and lore text stores human-readable inline index tokens. Linked tokens retain a stable entry ID; manually entered titles retain a category hint when one is known. Opening the Index performs one backend snapshot scan across indexed sources, so missing-entry suggestions do not add per-record frontend requests. Quick-created entries store their source identity in metadata to prevent duplicate suggestions even when their display title later changes.
 
 The repository keeps the standard Tauri project layout:
 

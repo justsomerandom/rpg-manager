@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { useBlocker, useParams } from "react-router-dom";
+import { useBlocker, useParams, useSearchParams } from "react-router-dom";
 import { getErrorMessage } from "../../api/client";
 import {
   createWorldEntry,
   deleteWorldEntry,
-  listWorldEntries,
+  getWorldIndexSnapshot,
   updateWorldEntry,
   WORLD_ENTRY_CATEGORIES,
+  type IndexSuggestion,
   type WorldEntry,
   type WorldEntryCategory,
 } from "../../api/worldEntries";
@@ -65,11 +66,23 @@ const CATEGORY_INFO: Record<WorldEntryCategory, { label: string; description: st
     label: "Item or relic",
     description: "Equipment families, materials, artifacts, and relics.",
   },
+  ability: {
+    label: "Ability or spell",
+    description: "Named abilities, spells, techniques, and supernatural gifts.",
+  },
+  character: {
+    label: "Character",
+    description: "Player characters and other individually tracked people.",
+  },
   character_template: {
     label: "Character archetype",
     description: "Cultures, roles, ancestries, and character concepts.",
   },
   faction: { label: "Faction", description: "Organizations, alliances, and political groups." },
+  landmark: {
+    label: "Landmark",
+    description: "Named structures, wonders, and points of interest.",
+  },
   region: {
     label: "Region or place",
     description: "Continents, territories, landmarks, and settlements.",
@@ -232,24 +245,28 @@ const renderDefinitionRows = (template: ParsedTemplate): ReactNode => {
 
 export function WorldIndexPage() {
   const { worldId } = useParams();
+  const [searchParams] = useSearchParams();
   const editorRef = useRef<HTMLElement>(null);
+  const handledDeepLinkRef = useRef("");
   const [templates, setTemplates] = useState<ParsedTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(Boolean(worldId));
   const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [templateReloadKey, setTemplateReloadKey] = useState(0);
 
   const [entries, setEntries] = useState<WorldEntry[]>([]);
+  const [suggestions, setSuggestions] = useState<IndexSuggestion[]>([]);
   const [entriesLoading, setEntriesLoading] = useState(Boolean(worldId));
   const [entriesLoadFailed, setEntriesLoadFailed] = useState(false);
   const [entriesError, setEntriesError] = useState<string | null>(null);
   const [entryReloadKey, setEntryReloadKey] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
+  const [searchTerm, setSearchTerm] = useState(() => searchParams.get("search") ?? "");
   const [filter, setFilter] = useState<WorldEntryCategory | "all">("all");
   const [editingEntry, setEditingEntry] = useState<WorldEntry | null>(null);
   const [formState, setFormState] = useState<EntryFormState>(() => makeEmptyForm());
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [creatingSuggestionKey, setCreatingSuggestionKey] = useState<string | null>(null);
 
   const [legacyEntries, setLegacyEntries] = useState<LegacyWikiEntry[]>([]);
   const [legacyDismissed, setLegacyDismissed] = useState(false);
@@ -284,6 +301,7 @@ export function WorldIndexPage() {
   useEffect(() => {
     if (!worldId) {
       setEntries([]);
+      setSuggestions([]);
       setEntriesLoading(false);
       setEntriesLoadFailed(true);
       setEntriesError("This page needs a valid world.");
@@ -292,13 +310,23 @@ export function WorldIndexPage() {
     let cancelled = false;
     setEntriesLoading(true);
     setEntries([]);
+    setSuggestions([]);
     setEntriesLoadFailed(false);
     setEntriesError(null);
-    listWorldEntries(worldId)
-      .then((data) => {
+    getWorldIndexSnapshot(worldId)
+      .then((snapshot) => {
         if (!cancelled) {
           setEntries(
-            data.map((entry) => ({ ...entry, category: normalizeCategory(entry.category) })),
+            snapshot.entries.map((entry) => ({
+              ...entry,
+              category: normalizeCategory(entry.category),
+            })),
+          );
+          setSuggestions(
+            snapshot.suggestions.map((suggestion) => ({
+              ...suggestion,
+              category: normalizeCategory(suggestion.category),
+            })),
           );
         }
       })
@@ -372,6 +400,43 @@ export function WorldIndexPage() {
     [entries, filter, normalizedSearch],
   );
 
+  const filteredSuggestions = useMemo(
+    () =>
+      normalizedSearch
+        ? suggestions.filter((suggestion) =>
+            `${suggestion.title} ${suggestion.summary} ${suggestion.context}`
+              .toLocaleLowerCase()
+              .includes(normalizedSearch),
+          )
+        : suggestions,
+    [normalizedSearch, suggestions],
+  );
+
+  useEffect(() => {
+    const entryId = searchParams.get("entry") ?? "";
+    const requestedSearch = searchParams.get("search") ?? "";
+    const deepLinkKey = entryId
+      ? `${worldId}:entry:${entryId}`
+      : requestedSearch
+        ? `${worldId}:search:${requestedSearch}`
+        : "";
+    if (!deepLinkKey || handledDeepLinkRef.current === deepLinkKey) return;
+    if (entryId) {
+      const entry = entries.find((candidate) => candidate.id === entryId);
+      if (!entry) return;
+      setSearchTerm(entry.title);
+      handledDeepLinkRef.current = deepLinkKey;
+      requestAnimationFrame(() =>
+        document
+          .getElementById(`index-entry-${entryId}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+      );
+      return;
+    }
+    setSearchTerm(requestedSearch);
+    handledDeepLinkRef.current = deepLinkKey;
+  }, [entries, searchParams, worldId]);
+
   const filteredTemplates = useMemo(() => {
     if (!normalizedSearch) return groupedTemplates;
     const result: Record<TemplateType, ParsedTemplate[]> = {
@@ -420,11 +485,12 @@ export function WorldIndexPage() {
         formState.category !== "note",
       );
 
-  const navigationBlocked = formDirty || saving || importingLegacy || Boolean(deletingId);
+  const navigationBlocked =
+    formDirty || saving || importingLegacy || Boolean(deletingId || creatingSuggestionKey);
   const blocker = useBlocker(navigationBlocked);
   useEffect(() => {
     if (blocker.state !== "blocked") return;
-    if (saving || importingLegacy || deletingId) {
+    if (saving || importingLegacy || deletingId || creatingSuggestionKey) {
       window.alert(
         "An index operation is still in progress. Wait for it to finish before leaving this page.",
       );
@@ -433,11 +499,11 @@ export function WorldIndexPage() {
     }
     if (window.confirm("Discard the unsaved index entry and leave this page?")) blocker.proceed();
     else blocker.reset();
-  }, [blocker, deletingId, importingLegacy, saving]);
+  }, [blocker, creatingSuggestionKey, deletingId, importingLegacy, saving]);
 
   useCloseGuard({
     active: navigationBlocked,
-    pending: Boolean(saving || importingLegacy || deletingId),
+    pending: Boolean(saving || importingLegacy || deletingId || creatingSuggestionKey),
     pendingMessage:
       "An index operation is still in progress. Wait for it to finish before leaving this page.",
     confirmMessage: "Discard the unsaved index entry and leave this page?",
@@ -489,6 +555,13 @@ export function WorldIndexPage() {
           serializeMetadata(tags),
         );
         setEntries((current) => [created, ...current]);
+        setSuggestions((current) =>
+          current.filter(
+            (suggestion) =>
+              suggestion.title.trim().toLocaleLowerCase() !==
+              created.title.trim().toLocaleLowerCase(),
+          ),
+        );
         setMessage(`“${created.title}” was added to the index.`);
       }
       resetEditor();
@@ -496,6 +569,41 @@ export function WorldIndexPage() {
       setEntriesError(getErrorMessage(error, "We couldn't save that index entry."));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCreateSuggestion = async (suggestion: IndexSuggestion) => {
+    if (
+      !worldId ||
+      entriesLoading ||
+      entriesLoadFailed ||
+      saving ||
+      deletingId ||
+      importingLegacy ||
+      creatingSuggestionKey
+    )
+      return;
+    setCreatingSuggestionKey(suggestion.key);
+    setEntriesError(null);
+    setMessage(null);
+    try {
+      const created = await createWorldEntry(
+        worldId,
+        suggestion.category,
+        suggestion.title,
+        suggestion.summary,
+        suggestion.body,
+        serializeMetadata([], {
+          indexSource: { kind: suggestion.source_kind, id: suggestion.source_id },
+        }),
+      );
+      setEntries((current) => [created, ...current]);
+      setSuggestions((current) => current.filter((item) => item.key !== suggestion.key));
+      setMessage(`“${created.title}” was added with details from ${suggestion.context}.`);
+    } catch (error) {
+      setEntriesError(getErrorMessage(error, "We couldn't create that suggested index entry."));
+    } finally {
+      setCreatingSuggestionKey(null);
     }
   };
 
@@ -671,6 +779,71 @@ export function WorldIndexPage() {
         )}
         {message && <p className="status-success">{message}</p>}
       </div>
+
+      {!entriesLoading && !entriesLoadFailed && filteredSuggestions.length > 0 && (
+        <section
+          className="section-card space-y-4 border-sky-500/30"
+          aria-labelledby="index-suggestions-heading"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="section-label">Index inbox</p>
+              <h2
+                id="index-suggestions-heading"
+                className="mt-1 text-lg font-semibold text-slate-100"
+              >
+                {suggestions.length} missing index {suggestions.length === 1 ? "entry" : "entries"}
+              </h2>
+              <p className="mt-1 max-w-3xl text-xs text-slate-400">
+                These characters, map locations, landmarks, and inline references do not have a
+                matching index entry yet. Review the autofill and create only what belongs in the
+                codex.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="secondary-button text-xs"
+              disabled={Boolean(creatingSuggestionKey)}
+              onClick={() => setEntryReloadKey((key) => key + 1)}
+            >
+              Refresh check
+            </button>
+          </div>
+          <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {filteredSuggestions.map((suggestion) => (
+              <li
+                key={suggestion.key}
+                className="flex flex-col justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/35 p-4"
+              >
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-sky-950 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-200">
+                      {CATEGORY_INFO[suggestion.category].label}
+                    </span>
+                    <span className="text-[11px] text-slate-500">{suggestion.context}</span>
+                  </div>
+                  <h3 className="mt-2 font-semibold text-slate-100">{suggestion.title}</h3>
+                  {suggestion.summary && (
+                    <p className="mt-1 line-clamp-3 text-xs leading-5 text-slate-400">
+                      {suggestion.summary}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="primary-button w-full text-xs"
+                  disabled={Boolean(
+                    creatingSuggestionKey || saving || deletingId || importingLegacy,
+                  )}
+                  onClick={() => handleCreateSuggestion(suggestion)}
+                >
+                  {creatingSuggestionKey === suggestion.key ? "Creating…" : "Create with autofill"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="section-card space-y-3" aria-label="Search and filter the world index">
         <div className="grid gap-3 sm:grid-cols-[1fr_15rem]">
@@ -938,7 +1111,12 @@ export function WorldIndexPage() {
                 return (
                   <article
                     key={entry.id}
-                    className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 space-y-3"
+                    id={`index-entry-${entry.id}`}
+                    className={`rounded-xl border bg-slate-900/30 p-4 space-y-3 ${
+                      searchParams.get("entry") === entry.id
+                        ? "border-sky-500 ring-1 ring-sky-500/50"
+                        : "border-slate-800"
+                    }`}
                   >
                     <header className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">

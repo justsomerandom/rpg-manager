@@ -9,6 +9,9 @@ import {
 } from "../../api/characters";
 import { getErrorMessage } from "../../api/client";
 import { listWorldTemplates } from "../../api/templates";
+import { listWorldEntries, type WorldEntry, type WorldEntryCategory } from "../../api/worldEntries";
+import { IndexLinkedTextarea } from "../../components/IndexLinkedTextarea";
+import { IndexLinkedText } from "../../components/IndexLinkedText";
 import { useCloseGuard } from "../../hooks/useCloseGuard";
 
 type CharacterFeatureType =
@@ -144,6 +147,8 @@ export function WorldCharactersPage() {
   const [templateLoading, setTemplateLoading] = useState(Boolean(worldId));
   const [charactersReloadKey, setCharactersReloadKey] = useState(0);
   const [templateReloadKey, setTemplateReloadKey] = useState(0);
+  const [indexEntries, setIndexEntries] = useState<WorldEntry[]>([]);
+  const [indexEntriesError, setIndexEntriesError] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -229,6 +234,28 @@ export function WorldCharactersPage() {
       cancelled = true;
     };
   }, [templateReloadKey, worldId]);
+
+  useEffect(() => {
+    if (!worldId) {
+      setIndexEntries([]);
+      return;
+    }
+    let cancelled = false;
+    setIndexEntriesError(null);
+    listWorldEntries(worldId)
+      .then((loadedEntries) => {
+        if (!cancelled) setIndexEntries(loadedEntries);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setIndexEntries([]);
+          setIndexEntriesError(getErrorMessage(error, "Index links are temporarily unavailable."));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [worldId]);
 
   const editingCharacter = useMemo(
     () => characters.find((character) => character.id === editingId) ?? null,
@@ -440,6 +467,44 @@ export function WorldCharactersPage() {
       );
     }
 
+    const preferredCategories: WorldEntryCategory[] | undefined =
+      feature.type === "item_slot"
+        ? ["item_type"]
+        : feature.type === "ability_slot"
+          ? ["ability"]
+          : undefined;
+
+    if (
+      feature.type === "text" ||
+      feature.type === "item_slot" ||
+      feature.type === "ability_slot" ||
+      feature.type === "custom_entity"
+    ) {
+      return (
+        <div key={feature.id}>
+          <label htmlFor={inputId} className="block text-xs font-semibold text-slate-400 mb-1">
+            {feature.label}{" "}
+            <span className="font-normal text-slate-500">({FEATURE_LABELS[feature.type]})</span>
+          </label>
+          <IndexLinkedTextarea
+            id={inputId}
+            rows={feature.type === "text" ? 3 : 2}
+            maxLength={500}
+            value={typeof value === "string" ? value : ""}
+            entries={indexEntries}
+            preferredCategories={preferredCategories}
+            disabled={Boolean(savingId || creating || deletingId)}
+            placeholder={
+              feature.type === "text"
+                ? "Write a description and insert index links where useful…"
+                : `Choose a ${FEATURE_LABELS[feature.type].toLocaleLowerCase()} or type a new title…`
+            }
+            onChange={(next) => setAttribute(feature.id, next)}
+          />
+        </div>
+      );
+    }
+
     return (
       <div key={feature.id}>
         <label htmlFor={inputId} className="block text-xs font-semibold text-slate-400 mb-1">
@@ -477,6 +542,7 @@ export function WorldCharactersPage() {
           </p>
         )}
         {message && <p className="status-success">{message}</p>}
+        {indexEntriesError && <p className="status-error">{indexEntriesError}</p>}
       </div>
 
       <section className="section-card space-y-3" aria-labelledby="add-character-heading">
@@ -646,15 +712,15 @@ export function WorldCharactersPage() {
                           >
                             Notes
                           </label>
-                          <textarea
+                          <IndexLinkedTextarea
                             id={`edit-notes-${character.id}`}
-                            className="input-field"
-                            rows={3}
+                            rows={5}
                             value={editNotes}
+                            entries={indexEntries}
                             maxLength={5000}
                             disabled={Boolean(savingId || creating || deletingId)}
                             placeholder="Background, goals, conditions, table notes…"
-                            onChange={(event) => setEditNotes(event.target.value)}
+                            onChange={setEditNotes}
                           />
                         </div>
                       </div>
@@ -704,7 +770,7 @@ export function WorldCharactersPage() {
                         </p>
                         {character.notes && (
                           <p className="mt-2 whitespace-pre-wrap text-sm text-slate-300">
-                            {character.notes}
+                            <IndexLinkedText text={character.notes} />
                           </p>
                         )}
                         {template &&
@@ -724,7 +790,9 @@ export function WorldCharactersPage() {
                                   >
                                     <dt className="text-slate-500">{feature.label}</dt>
                                     <dd className="max-w-48 truncate text-slate-300">
-                                      {formatAttributeValue(attributes[feature.id])}
+                                      <IndexLinkedText
+                                        text={formatAttributeValue(attributes[feature.id])}
+                                      />
                                     </dd>
                                   </div>
                                 ))}
